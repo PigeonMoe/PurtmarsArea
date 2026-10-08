@@ -1,0 +1,54 @@
+Settings:
+  EnableWorld: [world]
+  MemberLimit: 100
+  AreaLimit: 10
+  MaxRadius: 128
+  MaxExtensions: 16
+  # 荒地中的禁止操作，领地核心仍可放置。
+  ClaimWorld: {}
+  IgnoreFlags: [teleport]
+  Particle:
+    Period: 2
+    Distance: 1.5
+    Range: 50
+    # 每名玩家每轮粒子上限，超大领地也不会无限产生粒子。
+    Budget: 500
+  Flags:
+    particle: true
+    build: false
+    move: true
+    teleport: true
+    container: false
+    enchant-table: true
+    anvil: true
+    door: false
+    cake: false
+    item-drop: true
+    item-pick: true
+    damage-animals: false
+    damage-monster: false
+    spawn-animals: false
+    spawn-monster: false
+    redstone: false
+    redstone-perform: true
+    flow-lava: true
+    flow-water: true
+    villager-trade: true
+    shear: false
+    leash: false
+    falling: false
+    # 新增规则，阻止环境破坏领地及核心。
+    explosion: false
+    fire: false
+    pvp: true
+Cores:
+  '0':
+    size: {x: 8, y: 8, z: 8}
+    material: WHITE_STAINED_GLASS
+    name: '&e领地核心'
+    lore: ['&7放置后创建领地，右键管理', '&7与自己的一个领地相交时作为扩展']
+    shiny: true
+    drop:
+      material: GHAST_TEAR
+      name: '&7破损的领地核心'
+      lore: ['&8已经无法继续使用']

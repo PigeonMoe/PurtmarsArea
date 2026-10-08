@@ -1,0 +1,19 @@
+name: PurtmarsArea
+version: '${version}'
+main: ink.ptms.purtmarsarea.taboolib.platform.BukkitPlugin
+api-version: '26.2'
+authors: [PigeonMuyz]
+description: 基于 TabooLib 的普特莫斯领地核心与保护系统
+folia-supported: false
+commands:
+  purtmarsarea:
+    aliases: [pa, area]
+    description: 领地管理
+    usage: /pa help
+permissions:
+  PurtmarsArea.command.admin:
+    default: op
+  PurtmarsArea.bypass:
+    default: op
+  PurtmarsArea.create:
+    default: true
