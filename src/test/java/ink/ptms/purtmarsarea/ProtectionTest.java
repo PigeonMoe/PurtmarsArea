@@ -117,4 +117,19 @@ class ProtectionTest {
         var event = new io.papermc.paper.event.entity.EntityMoveEvent(horse,new Location(world,9,64,0),new Location(world,8,64,0));
         listener.mountedMove(event); assertTrue(event.isCancelled());
     }
+    @Test void transitionTitlesUseEnteredOwnerAndLeftOwnerAndIgnoreMovementInsideSameClaim() {
+        try (var bukkit = mockStatic(Bukkit.class)) {
+            var manager = mock(org.bukkit.plugin.PluginManager.class); bukkit.when(Bukkit::getPluginManager).thenReturn(manager);
+            listener.transition(new PlayerMoveEvent(visitor,new Location(world,20,64,0),new Location(world,1,64,0)));
+            verify(visitor).sendTitle("§6私人领地","§7已被 §fowner§7 占领.",10,40,10);
+            listener.transition(new PlayerMoveEvent(visitor,new Location(world,1,64,0),new Location(world,2,64,0)));
+            verify(visitor,times(1)).sendTitle(anyString(),anyString(),anyInt(),anyInt(),anyInt());
+            s.quit(visitor); listener.transition(new PlayerMoveEvent(visitor,new Location(world,1,64,0),new Location(world,20,64,0)));
+            verify(visitor,times(2)).sendTitle("§6私人领地","§7已被 §fowner§7 占领.",10,40,10);
+            Area next = new Area(UUID.randomUUID(),"world",UUID.randomUUID(),"AnotherOwner",Volume.sized(40,64,0,8,8,8,"0")); s.index.add(next);
+            listener.transition(new PlayerMoveEvent(visitor,new Location(world,1,64,0),new Location(world,40,64,0)));
+            verify(visitor).sendTitle("§6私人领地","§7已被 §fAnotherOwner§7 占领.",10,40,10);
+            verify(manager,times(2)).callEvent(any(AreaEnterEvent.class)); verify(manager,times(2)).callEvent(any(AreaLeaveEvent.class));
+        }
+    }
 }

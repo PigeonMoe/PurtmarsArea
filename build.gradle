@@ -4,7 +4,7 @@ plugins {
     id 'io.izzel.taboolib' version '2.0.39'
 }
 group = 'ink.ptms.purtmarsarea'
-version = '2.0.0+26.2'
+version = '2.1.0+26.2'
 repositories {
     mavenCentral()
     maven { url = 'https://repo.papermc.io/repository/maven-public/' }

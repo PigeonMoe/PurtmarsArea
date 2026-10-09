@@ -3,7 +3,8 @@ Settings:
   MemberLimit: 100
   AreaLimit: 10
   MaxRadius: 128
-  MaxExtensions: 16
+  MaxSideLength: 256
+  MemberInputTimeout: 60
   # 荒地中的禁止操作，领地核心仍可放置。
   ClaimWorld: {}
   IgnoreFlags: [teleport]
@@ -41,14 +42,45 @@ Settings:
     explosion: false
     fire: false
     pvp: true
+# dimensions 是实际方块边长；旧配置 size 始终保持半径语义。
 Cores:
   '0':
-    size: {x: 8, y: 8, z: 8}
+    dimensions: {x: 8, y: 8, z: 8}
     material: WHITE_STAINED_GLASS
-    name: '&e领地核心'
-    lore: ['&7放置后创建领地，右键管理', '&7与自己的一个领地相交时作为扩展']
+    name: '&e小型领地核心'
+    lore: ['&7保护范围: 8×8×8', '&7放置后创建领地，右键管理', '&7核心保护范围之间不能重叠']
     shiny: true
     drop:
       material: GHAST_TEAR
-      name: '&7破损的领地核心'
-      lore: ['&8已经无法继续使用']
+      name: '&7破碎的小型领地核心'
+      lore: ['&7修补后可继续使用']
+  '1':
+    dimensions: {x: 16, y: 16, z: 16}
+    material: WHITE_STAINED_GLASS
+    name: '&e中型领地核心'
+    lore: ['&7保护范围: 16×16×16', '&7放置后创建领地，右键管理', '&7核心保护范围之间不能重叠']
+    shiny: true
+    drop:
+      material: GHAST_TEAR
+      name: '&7破碎的中型领地核心'
+      lore: ['&7修补后可继续使用']
+  '2':
+    dimensions: {x: 32, y: 32, z: 32}
+    material: WHITE_STAINED_GLASS
+    name: '&e大型领地核心'
+    lore: ['&7保护范围: 32×32×32', '&7放置后创建领地，右键管理', '&7核心保护范围之间不能重叠']
+    shiny: true
+    drop:
+      material: GHAST_TEAR
+      name: '&7破碎的大型领地核心'
+      lore: ['&7修补后可继续使用']
+  '3':
+    dimensions: {x: 64, y: 64, z: 64}
+    material: WHITE_STAINED_GLASS
+    name: '&e超大型领地核心'
+    lore: ['&7保护范围: 64×64×64', '&7放置后创建领地，右键管理', '&7核心保护范围之间不能重叠']
+    shiny: true
+    drop:
+      material: GHAST_TEAR
+      name: '&7破碎的超大型领地核心'
+      lore: ['&7修补后可继续使用']

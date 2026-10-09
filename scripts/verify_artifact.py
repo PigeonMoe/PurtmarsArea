@@ -16,6 +16,13 @@ with zipfile.ZipFile(jar) as archive:
     names = set(archive.namelist())
     plugin = archive.read('plugin.yml').decode()
     assert "api-version: '26.2'" in plugin
+    assert "version: '2.1.0+26.2'" in plugin
+    config = archive.read("config.yml").decode()
+    for n in (8, 16, 32, 64):
+        assert f"dimensions: {{x: {n}, y: {n}, z: {n}}}" in config
+    for kind in ("小型", "中型", "大型", "超大型"):
+        assert f"破碎的{kind}领地核心" in config
+    assert "修补后可继续使用" in config
     assert 'folia-supported: false' in plugin
     assert 'depend:' not in plugin, 'Unexpected standalone TabooLib dependency'
     assert 'main: ink.ptms.purtmarsarea.taboolib.platform.BukkitPlugin' in plugin
@@ -46,5 +53,5 @@ digest = hashlib.sha256(jar.read_bytes()).hexdigest()
 print(f'PASS: {count} tests; Java 25; Paper 26.2; TabooLib 6.3.0-0e3a911')
 print(f'SHA256 {digest}')
 
-report = {'date': datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat(), 'target': 'Paper 26.2', 'java_class_major': 69, 'taboolib': '6.3.0-0e3a911', 'gradle_plugin': '2.0.39', 'artifact': 'dist/PurtmarsArea.jar', 'sha256': digest, 'suites': sorted(suites, key=lambda s: s['suite']), 'live_server_tested': False, 'real_player_tested': False}
+report = {'date': datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat(), 'version': '2.1.0+26.2', 'target': 'Paper 26.2', 'java_class_major': 69, 'taboolib': '6.3.0-0e3a911', 'gradle_plugin': '2.0.39', 'artifact': 'dist/PurtmarsArea.jar', 'sha256': digest, 'suites': sorted(suites, key=lambda s: s['suite']), 'live_server_tested': False, 'real_player_tested': False}
 (root / 'dist/verification.json').write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')

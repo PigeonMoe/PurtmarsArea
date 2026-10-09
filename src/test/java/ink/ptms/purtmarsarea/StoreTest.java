@@ -46,4 +46,16 @@ class StoreTest {
         Path legacy = dir.resolve("legacy-save"); Files.createDirectories(legacy); Files.writeString(legacy.resolve("world.yml"),"bad: {owner: x}\n");
         assertThrows(Exception.class, () -> new AreaStore(dir.resolve("areas.yml")).readLegacy(legacy)); assertFalse(Files.exists(dir.resolve("areas.yml")));
     }
+    @Test void schemaTwoRadiiUpgradeWithoutMovingAnyLegacyBoundary() throws Exception {
+        UUID id = UUID.randomUUID(); Path file = dir.resolve("areas.yml");
+        String old = "schema: 2\nareas:\n  "+id+":\n    world: world\n    owner-name: Old\n    volumes:\n    - {x: -17, y: 64, z: 0, rx: 8, ry: 8, rz: 8, core: '0'}\n    - {x: -1, y: 64, z: 0, rx: 8, ry: 8, rz: 8, core: '0'}\n";
+        Files.writeString(file,old); AreaStore store = new AreaStore(file); AreaIndex index = store.load();
+        assertEquals(old,Files.readString(file)); Area a = index.get(id);
+        assertEquals(new Volume(-17,64,0,8,8,8,"0"),a.volumes.getFirst()); assertEquals(17,a.volumes.getFirst().sizeX());
+        Area fresh = new Area(UUID.randomUUID(),"world",UUID.randomUUID(),"Fresh",Volume.sized(64,64,0,8,8,8,"0")); index.add(fresh);
+        store.save(index); assertEquals(old,Files.readString(dir.resolve("areas.yml.bak")));
+        assertTrue(Files.readString(file).startsWith("schema: 3")); AreaIndex reloaded = store.load();
+        assertEquals(a.volumes,reloaded.get(id).volumes); assertEquals(fresh.volumes,reloaded.get(fresh.id).volumes);
+        assertSame(reloaded.get(id),reloaded.at("world",7,72,8)); assertNull(reloaded.at("world",8,72,8));
+    }
 }

@@ -8,7 +8,7 @@ import java.util.*;
 
 public final class AreaCommands implements CommandExecutor, TabCompleter {
     private final AreaService s;
-    private static final List<String> BASIC = List.of("help", "info", "menu", "list", "set", "add", "remove", "name", "welcome", "farewell");
+    private static final List<String> BASIC = List.of("help", "info", "menu", "list", "set", "add", "remove", "name");
     private static final List<String> ADMIN = List.of("item", "save", "load", "reload", "import", "mirror", "status");
     public AreaCommands(AreaService s) { this.s = s; }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
@@ -18,7 +18,7 @@ public final class AreaCommands implements CommandExecutor, TabCompleter {
             switch (sub) {
                 case "help" -> {
                     sender.sendMessage("§e领地管理 §f/pa info | menu | list | add 玩家 | remove 玩家");
-                    sender.sendMessage("§f/pa set 权限 true/false [成员] | name 名称 | welcome 内容 | farewell 内容");
+                    sender.sendMessage("§f/pa set 权限 true/false [成员] | name 名称");
                     if (s.admin(sender)) sender.sendMessage("§7管理：/pa item 核心编号 [在线玩家] [数量] | save | reload | import | mirror | status");
                 }
                 case "status" -> AreaService.message(sender, (s.healthy ? "正常" : "保护锁定") + " | 领地 " + s.index.all().size() + " | TabooLib 6.3.0-0e3a911 | Paper 26.2");
@@ -40,7 +40,7 @@ public final class AreaCommands implements CommandExecutor, TabCompleter {
                 case "info" -> {
                     s.checkHealthy(); Area a = current(player(sender)); Volume v = a.volumes.getFirst();
                     AreaService.message(sender, a.name + " | 主人 " + a.ownerName + " | ID " + a.id);
-                    sender.sendMessage("§7核心 " + a.world + " " + v.x()+","+v.y()+","+v.z() + " | 半径 " + v.rx()+","+v.ry()+","+v.rz());
+                    sender.sendMessage("§7核心 " + a.world + " " + v.x()+","+v.y()+","+v.z() + " | 大小 " + v.sizeX()+"×"+v.sizeY()+"×"+v.sizeZ());
                     sender.sendMessage("§7成员：" + String.join(", ", a.members.values().stream().map(m -> m.name).toList()) + " | 扩展 " + (a.volumes.size()-1));
                 }
                 case "menu" -> { Player p = player(sender); s.menus.home(p, current(p)); }
@@ -60,15 +60,14 @@ public final class AreaCommands implements CommandExecutor, TabCompleter {
                     else { String key = s.memberKey(a, args[1]); s.change(() -> a.members.remove(key)); }
                     AreaService.message(p, "成员已更新");
                 }
-                case "name", "welcome", "farewell" -> {
-                    Player p = player(sender); Area a = current(p); s.requireManager(p, a);
-                    if (args.length < 2) throw new IllegalArgumentException("/pa " + sub + " 内容");
-                    String text = String.join(" ", Arrays.copyOfRange(args, 1, args.length));
-                    if (text.length() > (sub.equals("name") ? 32 : 120)) throw new IllegalArgumentException("内容过长");
-                    String value = !sub.equals("name") && text.equalsIgnoreCase("off") ? "" : text;
-                    s.change(() -> { switch (sub) { case "name" -> a.name = value; case "welcome" -> a.welcome = value; default -> a.farewell = value; } });
-                    AreaService.message(p, "领地显示已更新");
+                case "name" -> {
+                    Player p = player(sender); Area a = current(p); s.requireManager(p,a);
+                    if (args.length < 2) throw new IllegalArgumentException("/pa name 名称");
+                    String text = String.join(" ",Arrays.copyOfRange(args,1,args.length));
+                    if (text.length() > 32) throw new IllegalArgumentException("内容过长");
+                    s.change(() -> a.name = text); AreaService.message(p,"领地名称已更新");
                 }
+                case "welcome", "farewell" -> throw new IllegalArgumentException("占领提示采用固定样式，自动显示实际领地主人");
                 default -> throw new IllegalArgumentException("未知命令，使用 /pa help");
             }
         } catch (Exception ex) { AreaService.message(sender, Objects.requireNonNullElse(ex.getMessage(), "操作失败，请查看日志")); }

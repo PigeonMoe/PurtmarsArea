@@ -11,6 +11,9 @@ public final class AreaService {
     public final AreaStore store;
     public final CoreItems cores;
     public final AreaMenus menus;
+    public final MemberInput memberInput;
+    private final Map<UUID,OccupationNotice> occupations = new HashMap<>();
+    private record OccupationNotice(UUID area, long at) {}
     public AreaIndex index = new AreaIndex();
     public boolean healthy;
     public final EnumMap<Flag, Long> denials = new EnumMap<>(Flag.class);
@@ -21,9 +24,10 @@ public final class AreaService {
     }
     AreaService(JavaPlugin plugin, CoreItems cores) {
         this.plugin = plugin; store = new AreaStore(plugin.getDataFolder().toPath().resolve("areas.yml"));
-        this.cores = cores; menus = new AreaMenus(this);
+        this.cores = cores; memberInput = new MemberInput(this); menus = new AreaMenus(this);
     }
     public void reload() {
+        memberInput.clear(); occupations.clear();
         try {
             plugin.reloadConfig(); AreaIndex loaded = store.load(); cores.validate();
             index = loaded; healthy = true;
@@ -75,7 +79,15 @@ public final class AreaService {
             notices.put(p.getUniqueId(), now); message(p, healthy ? "此处不允许：" + f.title : "领地系统已锁定，请联系管理员");
         }
     }
-    public void quit(Player p) { notices.remove(p.getUniqueId()); }
+    public void quit(Player p) { notices.remove(p.getUniqueId()); occupations.remove(p.getUniqueId()); memberInput.cancel(p); }
+    public void close() { memberInput.clear(); occupations.clear(); }
+    public void showOccupation(Player p, Area a) {
+        long now = System.currentTimeMillis(); OccupationNotice previous = occupations.get(p.getUniqueId());
+        if (previous != null && previous.area.equals(a.id) && now-previous.at < 2000) return;
+        occupations.put(p.getUniqueId(),new OccupationNotice(a.id,now));
+        p.sendTitle("§6私人领地",occupationSubtitle(a.ownerName),10,40,10);
+    }
+    static String occupationSubtitle(String owner) { return "§7已被 §f"+owner+"§7 占领."; }
     public void mutableFlag(Flag f, boolean member) {
         if (plugin.getConfig().getStringList("Settings.IgnoreFlags").contains(f.id)) throw new IllegalArgumentException("管理员已锁定该权限");
         if (member && !f.personal) throw new IllegalArgumentException("环境权限不能单独设置给成员");
@@ -86,20 +98,12 @@ public final class AreaService {
         if (!plugin.getConfig().getStringList("Settings.EnableWorld").contains(l.getWorld().getName())
                 && !p.hasPermission("PurtmarsArea.bypass." + l.getWorld().getName())) throw new IllegalArgumentException("该世界不允许放置领地核心");
         Volume v = cores.volume(id, l); Set<Area> overlaps = index.overlaps(l.getWorld().getName(), v);
-        if (overlaps.stream().anyMatch(a -> !a.isOwner(p.getUniqueId(), p.getName()))) throw new IllegalArgumentException("范围与他人领地重叠");
-        if (overlaps.size() > 1) throw new IllegalArgumentException("核心同时覆盖多个独立领地，请调整位置");
-        if (!overlaps.isEmpty()) {
-            Area a = overlaps.iterator().next();
-            if (a.volumes.size() - 1 >= Math.min(256, plugin.getConfig().getInt("Settings.MaxExtensions", 16))) throw new IllegalArgumentException("扩展核心达到上限");
-            change(() -> { a.volumes.add(v); index.reindex(a); });
-            message(p, "领地范围已扩展");
-        } else {
-            long count = index.all().stream().filter(a -> a.isOwner(p.getUniqueId(), p.getName())).count();
-            if (!admin(p) && count >= plugin.getConfig().getInt("Settings.AreaLimit", 10)) throw new IllegalArgumentException("领地数量达到上限");
-            Area a = new Area(UUID.randomUUID(), l.getWorld().getName(), p.getUniqueId(), p.getName(), v);
-            for (Flag f : Flag.values()) a.flags.put(f, plugin.getConfig().getBoolean("Settings.Flags." + f.id, f.defaultValue));
-            change(() -> index.add(a)); message(p, "领地已创建，右键核心进行管理");
-        }
+        if (!overlaps.isEmpty()) throw new IllegalArgumentException("核心保护范围不能与任何已有核心重叠，包括自己的领地");
+        long count = index.all().stream().filter(a -> a.isOwner(p.getUniqueId(),p.getName())).count();
+        if (!admin(p) && count >= plugin.getConfig().getInt("Settings.AreaLimit",10)) throw new IllegalArgumentException("领地数量达到上限");
+        Area a = new Area(UUID.randomUUID(),l.getWorld().getName(),p.getUniqueId(),p.getName(),v);
+        for (Flag f : Flag.values()) a.flags.put(f,defaultValue(f));
+        change(() -> index.add(a)); message(p,"领地已创建，右键核心进行管理");
     }
     public void breakCore(Player p, Location l) {
         Area a = Objects.requireNonNull(core(l)); requireManager(p, a);
@@ -113,6 +117,7 @@ public final class AreaService {
     }
     public void addMember(Player p, Area a, String name) {
         requireManager(p, a);
+        if (!name.matches("[A-Za-z0-9_]{1,16}")) throw new IllegalArgumentException("请输入有效的玩家名称");
         var player = Bukkit.getPlayerExact(name);
         var known = player != null ? player : Bukkit.getOfflinePlayerIfCached(name);
         if (known == null || (!known.isOnline() && !known.hasPlayedBefore())) throw new IllegalArgumentException("玩家必须曾经加入此服务器");

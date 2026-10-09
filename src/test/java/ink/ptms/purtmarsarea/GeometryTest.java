@@ -41,4 +41,22 @@ class GeometryTest {
         assertThrows(IllegalArgumentException.class, () -> new Volume(0,0,0,129,8,8,"0"));
         assertThrows(IllegalArgumentException.class, () -> new Volume(Integer.MAX_VALUE,0,0,8,8,8,"0"));
     }
+    @ParameterizedTest @CsvSource({"8,-4,3", "16,-8,7", "32,-16,15", "64,-32,31"})
+    void exactSidesHaveExplicitEvenAnchors(int n, int low, int high) {
+        Volume v = Volume.sized(-17,64,-16,n,n,n,"0");
+        assertEquals(n,v.sizeX()); assertEquals(n,v.sizeY()); assertEquals(n,v.sizeZ());
+        assertEquals(-17+low,v.minX()); assertEquals(-17+high,v.maxX());
+        assertTrue(v.contains(v.minX(),v.minY(),v.minZ())); assertTrue(v.contains(v.maxX(),v.maxY(),v.maxZ()));
+        assertFalse(v.contains(v.minX()-1,64,-16)); assertFalse(v.contains(-17,v.maxY()+1,-16));
+        assertFalse(v.intersects(Volume.sized(-17+n,64,-16,n,n,n,"0")));
+        assertTrue(v.intersects(Volume.sized(-17+n-1,64,-16,n,n,n,"0")));
+        AreaIndex index = new AreaIndex(); Area a = area("world",v); index.add(a);
+        assertSame(a,index.at("world",v.minX(),v.minY(),v.minZ())); assertSame(a,index.at("world",v.maxX(),v.maxY(),v.maxZ()));
+    }
+    @Test void containmentAndVerticalIntersectionConflict() {
+        Volume large = Volume.sized(0,64,0,64,64,64,"3"), small = Volume.sized(0,64,0,8,8,8,"0");
+        assertTrue(large.intersects(small)); assertTrue(small.intersects(large));
+        assertFalse(small.intersects(Volume.sized(0,72,0,8,8,8,"0")));
+        assertTrue(small.intersects(Volume.sized(0,71,0,8,8,8,"0")));
+    }
 }

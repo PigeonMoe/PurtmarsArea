@@ -36,19 +36,22 @@ class CoreServiceTest {
         config.set("Settings.Flags.build",true); s.create(owner,loc(0),"0"); Area a = s.at(loc(0));
         assertTrue(a.enabled(Flag.BUILD)); assertEquals(owner.getUniqueId(),a.owner); assertEquals(1,s.store.load().all().size());
     }
-    @Test void matchingOwnerOverlapExtendsOneClaimAndRetainsPermissions() {
-        s.create(owner,loc(0),"0"); Area a = s.at(loc(0)); a.flags.put(Flag.CONTAINER,true);
-        s.create(owner,loc(16),"0"); assertEquals(1,s.index.all().size()); assertEquals(2,a.volumes.size());
-        assertSame(a,s.at(loc(24))); assertTrue(a.enabled(Flag.CONTAINER));
+    @Test void matchingOwnerOverlapIsRejectedAndRetainsPermissions() throws Exception {
+        s.create(owner,loc(0),"0"); Area a = s.at(loc(0)); a.flags.put(Flag.CONTAINER,true); s.save();
+        assertThrows(IllegalArgumentException.class, () -> s.create(owner,loc(16),"0"));
+        assertEquals(1,a.volumes.size()); assertNull(s.at(loc(24))); assertTrue(s.store.load().get(a.id).enabled(Flag.CONTAINER));
     }
     @Test void differentOwnerOverlapDeniedEvenWithAdminPermission() {
         s.create(owner,loc(0),"0"); when(other.hasPermission("PurtmarsArea.command.admin")).thenReturn(true);
         assertThrows(IllegalArgumentException.class, () -> s.create(other,loc(16),"0")); assertEquals(1,s.index.all().size());
     }
-    @Test void claimAndExtensionLimitsEnforced() {
-        s.create(owner,loc(0),"0"); assertThrows(IllegalArgumentException.class, () -> s.create(owner,loc(40),"0"));
-        s.create(owner,loc(16),"0"); s.create(owner,loc(32),"0");
-        assertThrows(IllegalArgumentException.class, () -> s.create(owner,loc(48),"0")); assertNull(s.at(loc(48)));
+    @Test void claimLimitEnforcedAndAdjacentClaimsAllowed() {
+        s.create(owner,loc(0),"0"); assertThrows(IllegalArgumentException.class, () -> s.create(owner,loc(17),"0"));
+        config.set("Settings.AreaLimit",10); s.create(owner,loc(17),"0"); assertEquals(2,s.index.all().size());
+    }
+    private Area legacyExtensions() {
+        Area a = new Area(UUID.randomUUID(),"world",owner.getUniqueId(),owner.getName(),new Volume(0,64,0,8,8,8,"0"));
+        a.volumes.add(new Volume(16,64,0,8,8,8,"0")); s.change(() -> s.index.add(a)); return a;
     }
     @Test void twoIndependentClaimsCannotBeSilentlyMerged() {
         config.set("Settings.AreaLimit",10); s.create(owner,loc(0),"0"); s.create(owner,loc(32),"0");
@@ -60,7 +63,7 @@ class CoreServiceTest {
         when(other.hasPermission("PurtmarsArea.create")).thenReturn(false); assertThrows(IllegalArgumentException.class, () -> s.create(other,loc(40),"0"));
     }
     @Test void removingPrimaryRequiresRemovingExtensionsFirst() {
-        s.create(owner,loc(0),"0"); s.create(owner,loc(16),"0");
+        legacyExtensions();
         assertThrows(IllegalArgumentException.class, () -> s.breakCore(owner,loc(0))); assertEquals(2,s.at(loc(0)).volumes.size());
     }
     @Test void laterCancelledPlacementRollsBackClaimOnDiskAndInMemory() throws Exception {
@@ -70,14 +73,29 @@ class CoreServiceTest {
         ProtectionListener listener = new ProtectionListener(s); listener.place(event); assertNotNull(s.at(loc(0)));
         when(event.isCancelled()).thenReturn(true); listener.placed(event);
         assertNull(s.at(loc(0))); assertTrue(s.store.load().all().isEmpty());
+        verify(owner,never()).sendTitle(anyString(),anyString(),anyInt(),anyInt(),anyInt());
     }
-    @Test void laterCancelledExtensionRetainsPrimaryAndItsFlags() throws Exception {
-        s.create(owner,loc(0),"0"); Area a = s.at(loc(0)); a.flags.put(Flag.CONTAINER,true);
+    @Test void overlappingPlacementIsCancelledWithoutChangingExistingClaim() throws Exception {
+        s.create(owner,loc(0),"0"); Area a = s.at(loc(0)); a.flags.put(Flag.CONTAINER,true); s.save();
         BlockPlaceEvent event = mock(BlockPlaceEvent.class); Block block = mock(Block.class); ItemStack item = mock(ItemStack.class);
         when(block.getLocation()).thenReturn(loc(16)); when(event.getBlock()).thenReturn(block); when(event.getItemInHand()).thenReturn(item);
         when(event.getPlayer()).thenReturn(owner); when(items.id(item)).thenReturn("0");
-        ProtectionListener listener = new ProtectionListener(s); listener.place(event); when(event.isCancelled()).thenReturn(true); listener.placed(event);
+        ProtectionListener listener = new ProtectionListener(s); listener.place(event); verify(event).setCancelled(true);
+        when(event.isCancelled()).thenReturn(true); listener.placed(event);
         assertEquals(1,a.volumes.size()); assertNull(s.at(loc(24))); assertTrue(s.store.load().get(a.id).enabled(Flag.CONTAINER));
+    }
+    @Test void brokenCoreCannotBePlacedOrCreateClaim() {
+        BlockPlaceEvent event = mock(BlockPlaceEvent.class); ItemStack item = mock(ItemStack.class);
+        when(event.getItemInHand()).thenReturn(item); when(event.getPlayer()).thenReturn(owner); when(items.isBroken(item)).thenReturn(true);
+        new ProtectionListener(s).place(event); verify(event).setCancelled(true); verify(items,never()).volume(anyString(),any());
+        assertTrue(s.index.all().isEmpty());
+    }
+    @Test void occupationUsesActualOwnerAndRateLimitsRepeatedTitles() {
+        s.create(owner,loc(0),"0"); Area a = s.at(loc(0)); a.ownerName = "RealOwner";
+        s.showOccupation(other,a); s.showOccupation(other,a);
+        verify(other,times(1)).sendTitle("§6私人领地","§7已被 §fRealOwner§7 占领.",10,40,10);
+        s.quit(other); s.showOccupation(other,a);
+        verify(other,times(2)).sendTitle(anyString(),anyString(),anyInt(),anyInt(),anyInt());
     }
     @Test void nonOwnerCannotManageAndAdministratorCan() {
         s.create(owner,loc(0),"0"); Area a = s.at(loc(0));
@@ -106,8 +124,15 @@ class CoreServiceTest {
         verify(block).setType(Material.AIR); verify(world).dropItemNaturally(any(Location.class),same(drop));
     }
     @Test void removingExtensionRetainsPrimaryProtection() throws Exception {
-        s.create(owner,loc(0),"0"); s.create(owner,loc(16),"0"); Block block = mock(Block.class); when(world.getBlockAt(any(Location.class))).thenReturn(block);
+        legacyExtensions(); Block block = mock(Block.class); when(world.getBlockAt(any(Location.class))).thenReturn(block);
         when(items.drop("0")).thenReturn(mock(ItemStack.class)); s.breakCore(owner,loc(16));
         assertNotNull(s.at(loc(0))); assertNull(s.at(loc(24))); assertEquals(1,s.store.load().all().iterator().next().volumes.size());
+    }
+    @Test void successfulPlacementShowsTitleAfterMonitorAndCancelledPlacementDoesNot() {
+        BlockPlaceEvent event = mock(BlockPlaceEvent.class); Block block = mock(Block.class); ItemStack item = mock(ItemStack.class);
+        when(block.getLocation()).thenReturn(loc(0)); when(event.getBlock()).thenReturn(block); when(event.getItemInHand()).thenReturn(item);
+        when(event.getPlayer()).thenReturn(owner); when(items.id(item)).thenReturn("0");
+        ProtectionListener listener = new ProtectionListener(s); listener.place(event); verify(owner,never()).sendTitle(anyString(),anyString(),anyInt(),anyInt(),anyInt());
+        listener.placed(event); verify(owner).sendTitle("§6私人领地","§7已被 §fOwner§7 占领.",10,40,10);
     }
 }

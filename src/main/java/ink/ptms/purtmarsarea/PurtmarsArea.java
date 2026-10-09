@@ -18,8 +18,9 @@ public final class PurtmarsArea extends Plugin {
         host.getCommand("purtmarsarea").setTabCompleter(commands);
         Bukkit.getPluginManager().registerEvents(new ProtectionListener(service), host);
         Bukkit.getPluginManager().registerEvents(service.menus, host);
+        Bukkit.getPluginManager().registerEvents(service.memberInput, host);
         Bukkit.getScheduler().runTaskTimer(host, service::particles, 20, 20);
-        host.getLogger().info("PurtmarsArea 2.0 | Paper 26.2 | TabooLib 6.3.0-0e3a911");
+        host.getLogger().info("PurtmarsArea 2.1 | Paper 26.2 | TabooLib 6.3.0-0e3a911");
     }
-    @Override public void onDisable() { if (service != null && service.healthy) service.save(); }
+    @Override public void onDisable() { if (service != null) { service.close(); if (service.healthy) service.save(); } }
 }

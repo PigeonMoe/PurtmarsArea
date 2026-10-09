@@ -26,6 +26,7 @@ public final class ProtectionListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void place(BlockPlaceEvent e) {
+        if (s.cores.isBroken(e.getItemInHand())) { e.setCancelled(true); AreaService.message(e.getPlayer(),"破碎的领地核心需要修补后才能使用"); return; }
         String id = s.cores.id(e.getItemInHand());
         if (id != null && e instanceof BlockMultiPlaceEvent) { e.setCancelled(true); return; }
         if (id != null) {
@@ -45,7 +46,7 @@ public final class ProtectionListener implements Listener {
                 if (area.volumes.size() == 1) s.index.remove(area);
                 else { area.volumes.remove(v); s.index.reindex(area); }
             });
-        }
+        } else if (v != null) { Area a = s.core(e.getBlock().getLocation()); if (a != null) s.showOccupation(e.getPlayer(),a); }
     }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void multiPlace(BlockMultiPlaceEvent e) {
@@ -181,12 +182,13 @@ public final class ProtectionListener implements Listener {
     public void transition(PlayerMoveEvent e) {
         if (e.getTo() == null) return;
         Area from = s.at(e.getFrom()), to = s.at(e.getTo()); if (from == to) return;
-        if (from != null) { Bukkit.getPluginManager().callEvent(new AreaLeaveEvent(e.getPlayer(), from)); tell(e.getPlayer(), from, from.farewell); }
-        if (to != null) { Bukkit.getPluginManager().callEvent(new AreaEnterEvent(e.getPlayer(), to)); tell(e.getPlayer(), to, to.welcome); }
+        s.memberInput.cancel(e.getPlayer());
+        if (from != null) { Bukkit.getPluginManager().callEvent(new AreaLeaveEvent(e.getPlayer(), from));  }
+        if (to != null) { Bukkit.getPluginManager().callEvent(new AreaEnterEvent(e.getPlayer(), to));  }
+        if (to != null || from != null) s.showOccupation(e.getPlayer(),to != null ? to : from);
     }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void teleportTransition(PlayerTeleportEvent e) { transition(e); }
-    private void tell(Player p, Area area, String text) { if (!text.isBlank()) p.sendTitle(CoreItems.color(text.replace("{name}", area.name)), "", 10, 40, 10); }
     @EventHandler public void join(PlayerJoinEvent e) { try { s.bindLegacy(e.getPlayer()); } catch (IllegalArgumentException ex) { AreaService.message(e.getPlayer(), ex.getMessage()); } }
     @EventHandler public void quit(PlayerQuitEvent e) { s.quit(e.getPlayer()); }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
