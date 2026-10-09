@@ -260,9 +260,25 @@ public final class ProtectionListener implements Listener {
         if (core(e.getToBlock()) || !natural(e.getBlock(), f) || !natural(e.getToBlock(), f)) e.setCancelled(true);
     }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
-    public void explode(EntityExplodeEvent e) { e.blockList().removeIf(b -> core(b) || !natural(b, Flag.EXPLOSION)); }
+    public void explode(EntityExplodeEvent e) {
+        protectExplosion(e,e.blockList(),e.getLocation(),e.getEntityType().name());
+    }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
-    public void explodeBlock(BlockExplodeEvent e) { e.blockList().removeIf(b -> core(b) || !natural(b, Flag.EXPLOSION)); }
+    public void explodeBlock(BlockExplodeEvent e) {
+        protectExplosion(e,e.blockList(),e.getBlock().getLocation(),"BLOCK:"+e.getBlock().getType().name());
+    }
+    private void protectExplosion(Cancellable event, List<Block> blocks, Location origin, String source) {
+        int total = blocks.size(), denied = 0; Location first = null;
+        for (Block b : blocks) {
+            if (core(b) || !natural(b,Flag.EXPLOSION)) {
+                denied++; if (first == null) first = b.getLocation();
+            }
+        }
+        // Selective filtering still lets adjacent supports break and update protected blocks.
+        // Cancel the terrain operation as a whole; clear the list defensively for later listeners.
+        if (denied > 0) { blocks.clear(); event.setCancelled(true); }
+        s.recordExplosion(source,origin,total,denied,first);
+    }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void burn(BlockBurnEvent e) { if (core(e.getBlock()) || !natural(e.getBlock(), Flag.FIRE)) e.setCancelled(true); }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)

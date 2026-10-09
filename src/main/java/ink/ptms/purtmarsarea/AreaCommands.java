@@ -9,7 +9,7 @@ import java.util.*;
 public final class AreaCommands implements CommandExecutor, TabCompleter {
     private final AreaService s;
     private static final List<String> BASIC = List.of("help", "info", "menu", "list", "set", "add", "remove", "name");
-    private static final List<String> ADMIN = List.of("item", "save", "load", "reload", "import", "mirror", "status");
+    private static final List<String> ADMIN = List.of("item", "save", "load", "reload", "import", "mirror", "status", "explosions");
     public AreaCommands(AreaService s) { this.s = s; }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         try {
@@ -19,13 +19,18 @@ public final class AreaCommands implements CommandExecutor, TabCompleter {
                 case "help" -> {
                     sender.sendMessage("§e领地管理 §f/pa info | menu | list | add 玩家 | remove 玩家");
                     sender.sendMessage("§f/pa set 权限 true/false [成员] | name 名称");
-                    if (s.admin(sender)) sender.sendMessage("§7管理：/pa item 核心编号 [在线玩家] [数量] | save | reload | import | mirror | status");
+                    if (s.admin(sender)) sender.sendMessage("§7管理：/pa item 核心编号 [在线玩家] [数量] | save | reload | import | mirror | status | explosions");
                 }
                 case "status" -> AreaService.message(sender, (s.healthy ? "正常" : "保护锁定") + " | 领地 " + s.index.all().size() + " | TabooLib 6.3.0-0e3a911 | Paper 26.2");
                 case "reload", "load" -> { s.reload(); AreaService.message(sender, s.healthy ? "配置与领地数据已载入" : "载入失败，系统已保护锁定，请查看日志"); }
                 case "save" -> { s.save(); AreaService.message(sender, "领地数据已保存"); }
                 case "import" -> { s.importLegacy(); AreaService.message(sender, "旧数据已导入，原文件保留在 legacy-save"); }
                 case "mirror" -> { AreaService.message(sender, "保护拦截计数（本次启动）："); s.denials.forEach((f, n) -> sender.sendMessage("§7" + f.title + ": " + n)); }
+                case "explosions" -> {
+                    AreaService.message(sender,"最近 10 次爆炸（本次启动，新到旧）：");
+                    if (s.explosionReports().isEmpty()) AreaService.message(sender,"尚未收到爆炸方块事件");
+                    else s.explosionReports().forEach(line -> sender.sendMessage("§7"+line));
+                }
                 case "item" -> {
                     s.checkHealthy(); if (args.length < 2 || args.length > 4) throw new IllegalArgumentException("/pa item 核心编号 [在线玩家] [数量]");
                     Player target = args.length > 2 ? Bukkit.getPlayerExact(args[2]) : player(sender);
@@ -41,6 +46,7 @@ public final class AreaCommands implements CommandExecutor, TabCompleter {
                     s.checkHealthy(); Area a = current(player(sender)); Volume v = a.volumes.getFirst();
                     AreaService.message(sender, a.name + " | 主人 " + a.ownerName + " | ID " + a.id);
                     sender.sendMessage("§7核心 " + a.world + " " + v.x()+","+v.y()+","+v.z() + " | 大小 " + v.sizeX()+"×"+v.sizeY()+"×"+v.sizeZ());
+                    sender.sendMessage("§7主核心边界 X " + v.minX()+".."+v.maxX()+" | Y "+v.minY()+".."+v.maxY()+" | Z "+v.minZ()+".."+v.maxZ());
                     sender.sendMessage("§7成员：" + String.join(", ", a.members.values().stream().map(m -> m.name).toList()) + " | 扩展 " + (a.volumes.size()-1));
                 }
                 case "menu" -> { Player p = player(sender); s.menus.home(p, current(p)); }

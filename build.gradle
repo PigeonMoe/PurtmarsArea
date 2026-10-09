@@ -4,7 +4,7 @@ plugins {
     id 'io.izzel.taboolib' version '2.0.39'
 }
 group = 'ink.ptms.purtmarsarea'
-version = '2.1.0+26.2'
+version = '2.1.1+26.2'
 repositories {
     mavenCentral()
     maven { url = 'https://repo.papermc.io/repository/maven-public/' }
@@ -26,7 +26,10 @@ dependencies {
     testImplementation 'org.mockito:mockito-core:5.20.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
-processResources { filesMatching('plugin.yml') { expand version: project.version } }
+processResources {
+    inputs.property('pluginVersion', project.version)
+    filesMatching('plugin.yml') { expand version: project.version }
+}
 test { useJUnitPlatform(); jvmArgs '-XX:+EnableDynamicAgentLoading' }
 
 tasks.register('dist', Copy) {

@@ -19,6 +19,17 @@ public final class AreaService {
     public final EnumMap<Flag, Long> denials = new EnumMap<>(Flag.class);
     private final Map<UUID, Long> notices = new HashMap<>();
     private long particleTick;
+    private final Deque<String> explosionReports = new ArrayDeque<>();
+    public List<String> explosionReports() { return List.copyOf(explosionReports); }
+    public void recordExplosion(String source, Location origin, int affected, int denied, Location first) {
+        String time = java.time.LocalTime.now().withNano(0).toString();
+        String text = time+" | "+source+" | "+coordinates(origin)+" | 候选方块 "+affected+" | 受保护 "+denied
+                + (denied > 0 ? " | 已取消整批方块破坏 | 首个命中 "+coordinates(first) : " | 未命中保护范围");
+        explosionReports.addFirst(text); while (explosionReports.size() > 10) explosionReports.removeLast();
+    }
+    private static String coordinates(Location l) {
+        return l == null || l.getWorld() == null ? "未知位置" : l.getWorld().getName()+" "+l.getBlockX()+","+l.getBlockY()+","+l.getBlockZ();
+    }
     public AreaService(JavaPlugin plugin) {
         this(plugin, new CoreItems(plugin));
     }

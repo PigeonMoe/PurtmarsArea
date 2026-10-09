@@ -72,11 +72,6 @@ class ProtectionTest {
         when(piston.getRelative(BlockFace.WEST)).thenReturn(moved); when(moved.getRelative(BlockFace.WEST)).thenReturn(dest);
         BlockPistonExtendEvent e = new BlockPistonExtendEvent(piston,List.of(moved),BlockFace.WEST); listener.pistonExtend(e); assertTrue(e.isCancelled());
     }
-    @Test void explosionOnlyRemovesProtectedBlocksFromDamageList() {
-        Block inside = block(1,64,0), outside = block(9,64,0), core = block(0,64,0); List<Block> blocks = new ArrayList<>(List.of(inside,outside,core));
-        EntityExplodeEvent e = mock(EntityExplodeEvent.class); when(e.blockList()).thenReturn(blocks); listener.explode(e); assertEquals(List.of(outside),blocks);
-        area.flags.put(Flag.EXPLOSION,true); blocks.addAll(List.of(inside,core)); listener.explode(e); assertEquals(List.of(outside,inside),blocks);
-    }
     @Test void projectilesUseShooterForAnimalDamageWithoutUnsafeCasts() {
         Arrow arrow = mock(Arrow.class); when(arrow.getShooter()).thenReturn(visitor); Cow cow = mock(Cow.class); when(cow.getLocation()).thenReturn(new Location(world,1,64,0));
         EntityDamageByEntityEvent e = mock(EntityDamageByEntityEvent.class); when(e.getDamager()).thenReturn(arrow); when(e.getEntity()).thenReturn(cow);

@@ -5,18 +5,20 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import pathlib
+import re
 import struct
 import xml.etree.ElementTree as ET
 import zipfile
 
 root = pathlib.Path(__file__).resolve().parents[1]
 jar = root / 'dist/PurtmarsArea.jar'
+version = re.search(r"(?m)^version = '([^']+)'$", (root / 'build.gradle').read_text()).group(1)
 with zipfile.ZipFile(jar) as archive:
     assert archive.testzip() is None, 'Corrupted ZIP'
     names = set(archive.namelist())
     plugin = archive.read('plugin.yml').decode()
     assert "api-version: '26.2'" in plugin
-    assert "version: '2.1.0+26.2'" in plugin
+    assert f"version: '{version}'" in plugin
     config = archive.read("config.yml").decode()
     for n in (8, 16, 32, 64):
         assert f"dimensions: {{x: {n}, y: {n}, z: {n}}}" in config
@@ -53,5 +55,5 @@ digest = hashlib.sha256(jar.read_bytes()).hexdigest()
 print(f'PASS: {count} tests; Java 25; Paper 26.2; TabooLib 6.3.0-0e3a911')
 print(f'SHA256 {digest}')
 
-report = {'date': datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat(), 'version': '2.1.0+26.2', 'target': 'Paper 26.2', 'java_class_major': 69, 'taboolib': '6.3.0-0e3a911', 'gradle_plugin': '2.0.39', 'artifact': 'dist/PurtmarsArea.jar', 'sha256': digest, 'suites': sorted(suites, key=lambda s: s['suite']), 'live_server_tested': False, 'real_player_tested': False}
+report = {'date': datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat(), 'version': version, 'target': 'Paper 26.2', 'java_class_major': 69, 'taboolib': '6.3.0-0e3a911', 'gradle_plugin': '2.0.39', 'artifact': 'dist/PurtmarsArea.jar', 'sha256': digest, 'suites': sorted(suites, key=lambda s: s['suite']), 'live_server_tested': False, 'real_player_tested': False}
 (root / 'dist/verification.json').write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
