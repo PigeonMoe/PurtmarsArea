@@ -283,6 +283,63 @@ fn the_piston_checks_fragile_blocks_and_papers_retract_directions() {
 }
 
 #[test]
+fn physical_redstone_uses_player_interaction_or_natural_build_permission() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().into());
+    let mut claim = area(1, [0, 64, 0], 8);
+    claim.flags.insert(Flag::RedstonePerform, true);
+    service.index.add(claim).unwrap();
+    let guest = Actor {
+        uuid: GUEST,
+        name: "Guest".into(),
+        operator: false,
+    };
+    let dim = "minecraft:overworld";
+    let plate = [1, 64, 0];
+    assert!(service.blocks_physical_redstone(dim, plate, Some(&guest)));
+    assert!(service.blocks_physical_redstone(dim, plate, None));
+    assert!(!service.blocks_physical_redstone(dim, [4, 64, 0], Some(&guest)));
+    service
+        .index
+        .areas
+        .get_mut(&OWNER)
+        .unwrap()
+        .flags
+        .insert(Flag::Redstone, true);
+    assert!(!service.blocks_physical_redstone(dim, plate, Some(&guest)));
+    assert!(service.blocks_physical_redstone(dim, plate, None));
+    service
+        .index
+        .areas
+        .get_mut(&OWNER)
+        .unwrap()
+        .flags
+        .insert(Flag::Build, true);
+    assert!(!service.blocks_physical_redstone(dim, plate, None));
+}
+
+#[test]
+fn paper_block_clicks_use_the_classification_before_inventory_opening() {
+    use crate::interaction_flag;
+    assert_eq!(
+        interaction_flag("minecraft:decorated_pot"),
+        Some(Flag::Container)
+    );
+    assert_eq!(
+        interaction_flag("minecraft:oak_shelf"),
+        Some(Flag::Container)
+    );
+    assert_eq!(interaction_flag("minecraft:ender_chest"), None);
+    assert_eq!(interaction_flag("minecraft:dragon_egg"), Some(Flag::Build));
+    assert_eq!(interaction_flag("minecraft:iron_door"), Some(Flag::Door));
+    assert_eq!(
+        interaction_flag("minecraft:stone_pressure_plate"),
+        Some(Flag::Redstone)
+    );
+}
+
+#[test]
 fn pressure_chamber_guard_requires_every_block_in_one_axis() {
     let center = [4, 65, -3];
     for axis in [0, 2] {

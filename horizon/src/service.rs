@@ -220,6 +220,25 @@ impl Service {
             || affected.any(|pos| !within(pos) || !within(step(pos)))
     }
 
+    pub fn blocks_physical_redstone(
+        &mut self,
+        dimension: &str,
+        pos: Point,
+        player: Option<&Actor>,
+    ) -> bool {
+        if self.store.is_none() {
+            return false;
+        }
+        let Some(actor) = player else {
+            return !self.natural(dimension, pos, Flag::Build);
+        };
+        let denied = !self.allowed(actor, dimension, pos, Flag::Redstone);
+        if denied {
+            self.queue_denial(actor.uuid, Flag::Redstone);
+        }
+        denied
+    }
+
     pub fn blocks_falling(
         &self,
         dimension: &str,

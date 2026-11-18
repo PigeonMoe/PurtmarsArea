@@ -280,14 +280,18 @@ impl Hooks for Mod {
         host: &mut dyn ServerHost,
         event: &mut mod_api::LeftClickBlockEvent,
     ) -> Flow {
-        if event.state.block().id(host) != "minecraft:dragon_egg" {
-            return Flow::Continue;
-        }
         let Some(player) = host.players().acting_player() else {
             return Flow::Continue;
         };
+        let flag = if self.service().error.is_some() {
+            Some(Flag::Build)
+        } else {
+            interaction_flag(&event.state.block().id(host))
+        };
         let dimension = host.dimension();
-        self.check(host, player, dimension, event.pos, Flag::Build)
+        flag.map_or(Flow::Continue, |flag| {
+            self.check(host, player, dimension, event.pos, flag)
+        })
     }
 
     #[listener(priority = 100)]
@@ -651,6 +655,23 @@ impl Hooks for Mod {
                     Flag::RedstonePerform,
                 ),
         )
+    }
+
+    fn block_trigger_entity_pre(
+        &self,
+        _: &dyn LevelHost,
+        event: &mut mod_api::BlockTriggerEntityPreEvent<'_>,
+    ) -> Flow {
+        let player = event.player.map(|uuid| Actor {
+            uuid: Uuid::from_u128(uuid),
+            name: event.name.to_owned(),
+            operator: event.permission_level > 0,
+        });
+        flow(self.service().blocks_physical_redstone(
+            dimension_name(&event.dimension),
+            point(event.pos),
+            player.as_ref(),
+        ))
     }
 
     fn block_fade(&self, _: &dyn LevelHost, event: &mut mod_api::BlockFadeEvent) -> Flow {
@@ -1429,18 +1450,21 @@ fn flow(cancel: bool) -> Flow {
 fn interaction_flag(id: &str) -> Option<Flag> {
     let name = id.strip_prefix("minecraft:")?;
     let flag = match name {
-        "chest" | "trapped_chest" | "ender_chest" | "barrel" | "hopper" | "dispenser"
-        | "dropper" | "furnace" | "blast_furnace" | "smoker" | "brewing_stand"
-        | "chiseled_bookshelf" | "jukebox" | "composter" | "flower_pot" | "crafter" | "lectern" => {
-            Flag::Container
-        }
+        "chest" | "trapped_chest" | "barrel" | "hopper" | "dispenser" | "dropper" | "furnace"
+        | "blast_furnace" | "smoker" | "brewing_stand" | "chiseled_bookshelf" | "jukebox"
+        | "composter" | "flower_pot" | "crafter" | "lectern" | "decorated_pot" => Flag::Container,
         "enchanting_table" => Flag::Enchant,
         "anvil" | "chipped_anvil" | "damaged_anvil" => Flag::Anvil,
         "cake" | "candle_cake" => Flag::Cake,
         "lever" | "repeater" | "comparator" | "daylight_detector" | "tripwire" => Flag::Redstone,
-        "respawn_anchor" | "tnt" | "dragon_egg" | "bell" | "decorated_pot" | "sweet_berry_bush"
-        | "cave_vines" | "cave_vines_plant" => Flag::Build,
-        _ if name.ends_with("shulker_box") || name.starts_with("potted_") => Flag::Container,
+        "respawn_anchor" | "tnt" | "dragon_egg" | "bell" | "sweet_berry_bush" | "cave_vines"
+        | "cave_vines_plant" => Flag::Build,
+        _ if name.ends_with("shulker_box")
+            || name.ends_with("_shelf")
+            || name.starts_with("potted_") =>
+        {
+            Flag::Container
+        }
         _ if name.ends_with("_door")
             || name.ends_with("_trapdoor")
             || name.ends_with("_fence_gate") =>
