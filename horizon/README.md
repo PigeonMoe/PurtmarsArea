@@ -4,13 +4,13 @@ Horizon 26.3 原生服务端插件预览。Rust 插件实现位于本目录，Pa
 
 ## 在 PigeonMoe Horizon 上构建
 
-Horizon.3 的 `purtmarsarea.hmod` 是原生源码包，对应 PigeonMoe Horizon 引擎提交 `f5542714eda9b8fa1157435ae8b3e992d188cd5e`。使用该源码构建本地开发 SDK。生成的服务端运行时与执行构建的操作系统和 CPU 架构匹配。以下命令以 Linux 或 macOS 为例。
+Horizon.4 的 `purtmarsarea.hmod` 是原生源码包，对应 PigeonMoe Horizon 引擎提交 `d2679a263841152d461e921fba39007e9ba4d3a1`。使用该源码构建本地开发 SDK。生成的服务端运行时与执行构建的操作系统和 CPU 架构匹配。以下命令以 Linux 或 macOS 为例。
 
 先准备可运行的 `horizon-launcher`、Rustup、Python 3.11 或更新版本、JDK 25、兼容的 Minecraft Java Edition 26.3 客户端安装和对应的 26.3 服务端 JAR。使用绝对路径设置 `MINECRAFT_DIR` 及 `SERVER_JAR`。
 
 ```sh
 cd /absolute/path/to/pigeon-horizon
-git switch --detach f5542714eda9b8fa1157435ae8b3e992d188cd5e
+git switch --detach d2679a263841152d461e921fba39007e9ba4d3a1
 export RUSTUP_TOOLCHAIN="$(cat tools/ci/rust-version)"  # 1.99.1
 rustup toolchain install "$RUSTUP_TOOLCHAIN"
 rustup component add rust-src --toolchain "$RUSTUP_TOOLCHAIN"
@@ -88,8 +88,8 @@ Settings:
 | 领地 | 4 种默认核心、三维边界、重叠检查、主人 UUID、成员独立权限、拆除与破碎核心。创建通过 `/pa item` 发放后放置 |
 | 游戏界面 | 核心右键首页，领地与成员分页，成员独立设置及恢复默认，通过私密聊天输入成员名，Shift 点击移除。穿越边界和创建成功时显示领地标题，开启 `particle` 的领地显示边界 |
 | 命令 | `/purtmarsarea`、`/pa`、`/area`。支持信息、列表、菜单、命名、成员管理、权限开关、发放、保存、重载、导入、管理诊断 |
-| 玩家保护 | 方块放置和拆除、水桶、双箱、门、实体交互和近战、地面移动和客户端驱动的车辆移动、主动丢弃物品、物品与箭矢拾取。`/tp`、末影珍珠、紫颂果及观察者传送检查原点和落点；喷溅及滞留药水逐目标检查有害效果 |
-| 世界保护 | 火与流体、活塞、自然生物生成、海绵逐方块吸水、漏斗传输及吸入、发射器和投掷器、批量爆炸方块破坏。Slimefun 工位会同时检查下方发射器的领地权限 |
-| Paper 差异 | 待补末地和下界门户的最终落点、服务端驱动的矿车、外来落沙、红石电平更新、部分投射物伤害及施肥多方块变更。Paper 事件接口依赖 Bukkit，Horizon 使用原生 Rust SDK |
+| 玩家保护 | 方块放置和拆除、水桶、双箱、门、实体交互和近战、地面移动和客户端驱动的车辆移动、主动丢弃物品、物品与箭矢拾取。`/tp`、末影珍珠、紫颂果、观察者与原版门户传送检查原点和落点；喷溅及滞留药水逐目标检查有害效果 |
+| 世界保护 | 火与流体、活塞、自然生物生成、海绵逐方块吸水、漏斗传输及吸入、发射器和投掷器、批量爆炸方块破坏。支持按零件位置冻结已接入的红石电平变化，以及按原始领地和落点保护下落方块。Slimefun 工位会同时检查输入发射器的权限，包括洗矿机上方的发射器 |
+| Paper 差异 | 待补服务端驱动的矿车、探测铁轨等红石路径、部分投射物伤害及施肥和生长的次级方块变更。Paper 事件接口依赖 Bukkit，Horizon 使用原生 Rust SDK |
 
-Rust 测试覆盖边界与重叠、权限与玩家改名、旧存档迁移、存储失败后的保护、爆炸预判和粒子采样。真实 Minecraft 26.3 客户端联测仍待完成。
+Rust 测试覆盖边界与重叠、权限与玩家改名、旧存档迁移、存储失败后的保护、爆炸预判、粒子采样和下落方块的原始领地。真实 Minecraft 26.3 客户端联测仍待完成。

@@ -41,6 +41,30 @@ fn overlap_rules_cover_the_whole_cuboid() {
 }
 
 #[test]
+fn falling_rules_distinguish_the_original_claim_from_external_or_unknown_origins() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().into());
+    let mut claim = area(1, [0, 64, 0], 8);
+    service.index.add(claim.clone()).unwrap();
+    let dim = "minecraft:overworld";
+    let inside = [0, 63, 0];
+    let outside = [0, 68, 0];
+    assert!(service.blocks_falling(dim, [0, 64, 0], Some((dim, [0, 64, 0]))));
+    assert!(!service.blocks_falling(dim, inside, Some((dim, [0, 66, 0]))));
+    assert!(service.blocks_falling(dim, inside, Some((dim, outside))));
+    assert!(service.blocks_falling(dim, inside, Some(("minecraft:the_nether", inside))));
+    assert!(service.blocks_falling(dim, inside, None));
+    assert!(!service.blocks_falling(dim, outside, Some((dim, inside))));
+
+    service.index = AreaIndex::default();
+    claim.flags.insert(Flag::Falling, true);
+    service.index.add(claim).unwrap();
+    assert!(!service.blocks_falling(dim, inside, Some((dim, outside))));
+    assert!(service.blocks_falling(dim, [0, 64, 0], None));
+}
+
+#[test]
 fn owner_uuid_survives_rename_and_member_uses_independent_defaults() {
     let mut a = area(1, [0, 64, 0], 8);
     a.flags.insert(Flag::Build, true);

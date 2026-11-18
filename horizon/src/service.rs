@@ -180,6 +180,21 @@ impl Service {
         self.at(dimension, from).map(|area| area.id) != self.at(dimension, to).map(|area| area.id)
     }
 
+    pub fn blocks_falling(
+        &self,
+        dimension: &str,
+        target: Point,
+        origin: Option<(&str, Point)>,
+    ) -> bool {
+        let claim = self.at(dimension, target);
+        self.store.is_some()
+            && (claim.is_some_and(|area| area.core(target).is_some())
+                || (origin.is_none_or(|(origin_dimension, origin)| {
+                    self.at(origin_dimension, origin).map(|area| area.id)
+                        != claim.map(|area| area.id)
+                }) && !self.natural(dimension, target, Flag::Falling)))
+    }
+
     pub fn denial(&mut self, actor: Uuid, flag: Flag) -> Option<String> {
         let count = self.denials.entry(flag).or_default();
         *count = count.saturating_add(1);

@@ -295,18 +295,33 @@ impl Hooks for Mod {
             service.pending_placements.remove(&uuid);
         }
         let under = [pos[0], pos[1].saturating_sub(1), pos[2]];
+        let over = [pos[0], pos[1].saturating_add(1), pos[2]];
         let slimefun_loaded = self.service().slimefun_loaded;
-        let slimefun = slimefun_loaded
-            && (matches!(
-                block.as_deref(),
-                Some("minecraft:crafting_table" | "minecraft:nether_brick_fence")
-            ) || block_key.is_some_and(|key| {
-                host.block_in_tag(key, "minecraft:wooden_fences") == Some(true)
-            }))
-            && level
-                .and_then(|level| level.block(host, under))
-                .is_some_and(|block| block.id(host) == "minecraft:dispenser")
-            && self.check(host, player, dimension, under, Flag::Container) == Flow::Cancel;
+        let slimefun = if slimefun_loaded {
+            let wooden_fence = block_key
+                .is_some_and(|key| host.block_in_tag(key, "minecraft:wooden_fences") == Some(true));
+            let at = |point| {
+                level
+                    .and_then(|level| level.block(host, point))
+                    .map(|key| key.id(host))
+            };
+            let below_machine = wooden_fence
+                || matches!(
+                    block.as_deref(),
+                    Some("minecraft:crafting_table" | "minecraft:nether_brick_fence")
+                );
+            let under_block = at(under);
+            let above_machine = wooden_fence
+                && under_block.as_deref() == Some("minecraft:cauldron")
+                && at(over).as_deref() == Some("minecraft:dispenser");
+            (below_machine
+                && under_block.as_deref() == Some("minecraft:dispenser")
+                && self.check(host, player, dimension, under, Flag::Container) == Flow::Cancel)
+                || (above_machine
+                    && self.check(host, player, dimension, over, Flag::Container) == Flow::Cancel)
+        } else {
+            false
+        };
         let (core, locked) = {
             let service = self.service();
             (
@@ -570,6 +585,36 @@ impl Hooks for Mod {
             dimension_name(&event.dimension),
             point(event.pos),
             Flag::Water,
+        )
+    }
+
+    fn falling_block_change_pre(
+        &self,
+        _: &dyn LevelHost,
+        event: &mut mod_api::FallingBlockChangePreEvent<'_>,
+    ) -> Flow {
+        let dimension = dimension_name(&event.dimension);
+        let origin = (!event.origin_dimension.is_empty())
+            .then(|| (event.origin_dimension, point(event.origin_pos)));
+        flow(
+            self.service()
+                .blocks_falling(dimension, point(event.pos), origin),
+        )
+    }
+
+    fn block_redstone_current_pre(
+        &self,
+        _: &dyn LevelHost,
+        event: &mut mod_api::BlockRedstoneCurrentPreEvent,
+    ) -> Flow {
+        let service = self.service();
+        flow(
+            service.store.is_some()
+                && !service.natural(
+                    dimension_name(&event.dimension),
+                    point(event.pos),
+                    Flag::RedstonePerform,
+                ),
         )
     }
 
