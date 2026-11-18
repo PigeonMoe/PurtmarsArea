@@ -65,6 +65,127 @@ fn falling_rules_distinguish_the_original_claim_from_external_or_unknown_origins
 }
 
 #[test]
+fn projectile_veto_matches_only_the_original_damage_attempt() {
+    use crate::combat::{Shot, target_flag};
+    use mod_api::entity::health::HurtSource;
+
+    let mut service = Service::default();
+    let shot = Shot::at_impact("minecraft:spectral_arrow", 21, 11, 12).unwrap();
+    service.denied_shots.insert(shot);
+    let another = Shot::at_impact("minecraft:trident", 31, 11, 12).unwrap();
+    service.denied_shots.insert(another);
+    let other_shooter = Shot::at_impact("minecraft:arrow", 41, 13, 12).unwrap();
+    service.denied_shots.insert(other_shooter);
+    let impact = HurtSource {
+        damage_type: "minecraft:arrow",
+        causing: 11,
+        direct: 21,
+        position: None,
+    };
+    let denied = |target, source| {
+        Shot::at_damage(target, &source).is_some_and(|hit| service.denied_shots.contains(&hit))
+    };
+    assert!(denied(12, impact));
+    assert!(denied(
+        12,
+        HurtSource {
+            damage_type: "minecraft:trident",
+            direct: 31,
+            ..impact
+        }
+    ));
+    assert!(denied(
+        12,
+        HurtSource {
+            causing: 13,
+            direct: 41,
+            ..impact
+        }
+    ));
+    assert!(!denied(
+        12,
+        HurtSource {
+            causing: 11,
+            direct: 41,
+            ..impact
+        }
+    ));
+    assert!(!denied(13, impact));
+    assert!(!denied(
+        12,
+        HurtSource {
+            causing: 0,
+            ..impact
+        }
+    ));
+    assert!(!denied(
+        12,
+        HurtSource {
+            direct: 22,
+            ..impact
+        }
+    ));
+    assert!(!denied(
+        12,
+        HurtSource {
+            damage_type: "minecraft:trident",
+            ..impact
+        }
+    ));
+    assert!(!denied(
+        12,
+        HurtSource {
+            damage_type: "minecraft:magic",
+            ..impact
+        }
+    ));
+    assert_eq!(target_flag("minecraft:end_crystal", false), Flag::Build);
+    assert_eq!(target_flag("minecraft:oak_boat", false), Flag::Build);
+    assert_eq!(
+        target_flag("minecraft:armor_stand", true),
+        Flag::DamageAnimals
+    );
+    assert_eq!(target_flag("minecraft:zombie", true), Flag::DamageMonster);
+    assert_eq!(target_flag("minecraft:slime", true), Flag::DamageAnimals);
+    assert_eq!(
+        target_flag("minecraft:ender_dragon", true),
+        Flag::DamageAnimals
+    );
+}
+
+#[test]
+fn pvp_uses_the_shooters_current_level_and_the_victims_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().into());
+    let mut claim = area(1, [0, 64, 0], 8);
+    claim.flags.insert(Flag::Pvp, false);
+    service.index.add(claim).unwrap();
+    let overworld = "minecraft:overworld";
+    let nether = "minecraft:the_nether";
+    let inside = [0, 64, 0];
+    let outside = [5, 64, 0];
+    assert!(crate::combat::denies_pvp(
+        &service,
+        Some((overworld, inside)),
+        nether,
+        [5.0, 64.0, 0.0]
+    ));
+    assert!(crate::combat::denies_pvp(
+        &service,
+        Some((nether, outside)),
+        overworld,
+        [-3.1, 64.0, 0.0]
+    ));
+    assert!(!crate::combat::denies_pvp(
+        &service,
+        Some((nether, inside)),
+        overworld,
+        [5.0, 64.0, 0.0]
+    ));
+}
+
+#[test]
 fn owner_uuid_survives_rename_and_member_uses_independent_defaults() {
     let mut a = area(1, [0, 64, 0], 8);
     a.flags.insert(Flag::Build, true);

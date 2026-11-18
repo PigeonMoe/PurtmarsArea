@@ -3,7 +3,7 @@ use crate::{
     store::{Config, KnownPlayers, Settings, Store},
 };
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -44,6 +44,7 @@ pub struct Service {
     pub transit_entities: HashMap<u128, u64>,
     pub connected_players: BTreeSet<Uuid>,
     pub pending_notices: Vec<(Uuid, String)>,
+    pub denied_shots: HashSet<crate::combat::Shot>,
     notices: HashMap<Uuid, Instant>,
     occupations: HashMap<Uuid, (Uuid, Instant)>,
 }

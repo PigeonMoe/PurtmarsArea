@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 
+mod combat;
 mod commands;
 mod cores;
 mod menu;
@@ -90,6 +91,7 @@ impl Hooks for Mod {
                     .retain(|_, tick| *tick >= oldest_transfer);
                 service.clicked_cores.clear();
                 service.pending_placements.clear();
+                service.denied_shots.clear();
                 std::mem::take(&mut service.pending_notices)
             };
             for (id, notice) in notices {
@@ -427,16 +429,14 @@ impl Hooks for Mod {
                 .dimension(host)
                 .map(|dimension| dimension.to_string());
             let source_pos = player.entity().block_position(host);
-            let safe_source = source_dim
-                .zip(source_pos)
-                .is_none_or(|(dimension, source)| service.natural(&dimension, source, Flag::Pvp));
-            return flow(!safe_source || !service.natural(event.dimension, pos, Flag::Pvp));
+            return flow(combat::denies_pvp(
+                &service,
+                source_dim.as_deref().zip(source_pos),
+                event.dimension,
+                event.position,
+            ));
         }
-        let flag = if hostile(event.target_kind) {
-            Flag::DamageMonster
-        } else {
-            Flag::DamageAnimals
-        };
+        let flag = combat::target_flag(event.target_kind, true);
         let Some(actor) = actor(host, player) else {
             return Flow::Continue;
         };
@@ -873,22 +873,105 @@ impl Hooks for Mod {
         let pos = block_position(event.pos);
         if event.kind == "minecraft:player" {
             let source_pos = player.entity().block_position(host);
-            let service = self.service();
-            return flow(
-                service.store.is_some()
-                    && (!service.natural(dimension, pos, Flag::Pvp)
-                        || source_pos
-                            .is_some_and(|source| !service.natural(dimension, source, Flag::Pvp))),
-            );
+            return flow(combat::denies_pvp(
+                &self.service(),
+                source_pos.map(|source| (dimension, source)),
+                dimension,
+                event.pos,
+            ));
         }
-        let flag = if entity_inventory(event.kind) || event.kind == "minecraft:painting" {
-            Flag::Build
-        } else if hostile(event.kind) {
-            Flag::DamageMonster
-        } else {
-            Flag::DamageAnimals
+        let living = host
+            .entity(event.entity as u32)
+            .and_then(|entity| host.living(entity))
+            .is_some();
+        self.check(
+            host,
+            player,
+            dimension,
+            pos,
+            combat::target_flag(event.kind, living),
+        )
+    }
+
+    fn hears_projectile_impacts(
+        &self,
+        _: &dyn mod_api::Host,
+        event: &mut mod_api::HearsProjectileImpactsEvent,
+    ) {
+        let service = self.service();
+        event.hears |= service.store.is_some()
+            && (service.error.is_some()
+                || !service.index.areas.is_empty()
+                || service
+                    .config
+                    .as_ref()
+                    .is_some_and(|config| !config.settings.claim_world.is_empty()));
+    }
+
+    fn projectile_impact(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::ProjectileImpactEvent<'_>,
+    ) -> Flow {
+        let Some(target_id) = event.entity else {
+            return Flow::Continue;
         };
-        self.check(host, player, dimension, pos, flag)
+        let Some(shot) =
+            combat::Shot::at_impact(event.kind, event.projectile, event.owner, target_id)
+        else {
+            return Flow::Continue;
+        };
+        let Some(target) = host.entity(target_id) else {
+            return Flow::Continue;
+        };
+        let Some(position) = target.position(host) else {
+            return Flow::Continue;
+        };
+        let owner = (event.owner != 0)
+            .then(|| player_entity(host, event.owner))
+            .flatten();
+        let living = host.living(target).is_some();
+        let mut service = self.service();
+        if service.store.is_none() {
+            return Flow::Continue;
+        }
+        let denied = if event.entity_kind == "minecraft:player" {
+            owner.is_some_and(|player| {
+                let source = player.dimension(host).map(|dim| dim.to_string());
+                combat::denies_pvp(
+                    &service,
+                    source.as_deref().zip(player.entity().block_position(host)),
+                    event.dimension,
+                    position,
+                )
+            })
+        } else {
+            let flag = combat::target_flag(event.entity_kind, living);
+            let target = block_position(position);
+            match owner.and_then(|player| actor(host, player)) {
+                Some(owner) => !service.allowed(&owner, event.dimension, target, flag),
+                None => !living && !service.natural(event.dimension, target, flag),
+            }
+        };
+        if denied {
+            service.denied_shots.insert(shot);
+        } else {
+            service.denied_shots.remove(&shot);
+        }
+        Flow::Continue
+    }
+
+    fn entity_invulnerability_check(
+        &self,
+        level: mod_api::LevelSide<'_>,
+        event: &mut mod_api::EntityInvulnerabilityCheckEvent<'_>,
+    ) {
+        if matches!(level, mod_api::LevelSide::Server(_))
+            && !event.invulnerable
+            && let Some(shot) = combat::Shot::at_damage(event.entity, event.source)
+        {
+            event.invulnerable = self.service().denied_shots.contains(&shot);
+        }
     }
 
     fn entity_interact(
@@ -1326,6 +1409,7 @@ fn entity_interaction(kind: &str, held: Option<String>) -> Flag {
 }
 
 fn hostile(kind: &str) -> bool {
+    // Paper's Monster interface is narrower than its Enemy interface.
     matches!(
         kind.strip_prefix("minecraft:").unwrap_or(""),
         "blaze"
@@ -1336,18 +1420,13 @@ fn hostile(kind: &str) -> bool {
             | "creeper"
             | "drowned"
             | "elder_guardian"
-            | "ender_dragon"
             | "enderman"
             | "endermite"
             | "evoker"
-            | "ghast"
             | "giant"
             | "guardian"
-            | "hoglin"
             | "husk"
             | "illusioner"
-            | "magma_cube"
-            | "phantom"
             | "piglin"
             | "piglin_brute"
             | "pillager"
@@ -1355,7 +1434,6 @@ fn hostile(kind: &str) -> bool {
             | "shulker"
             | "silverfish"
             | "skeleton"
-            | "slime"
             | "spider"
             | "stray"
             | "vex"

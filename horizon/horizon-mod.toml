@@ -1,6 +1,6 @@
 id = "purtmarsarea"
 name = "PurtmarsArea"
-version = "2.1.1-horizon.4"
+version = "2.1.1-horizon.5"
 description = "普特莫斯领地保护"
 authors = ["PigeonMoe"]
 api = "0.2"
