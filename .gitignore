@@ -6,3 +6,6 @@ build/
 dist/
 validation/
 .DS_Store
+
+/horizon/.horizon/
+/horizon/target/

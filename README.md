@@ -1,3 +1,5 @@
+> 本分支的 Horizon 26.3 原生插件预览，请见 [Horizon 说明](horizon/README.md)。以下是 Paper 26.2 维护版的使用说明。
+
 # PurtmarsArea 2.1.1
 
 面向 **Paper 26.2 / Java 25+** 的领地核心插件。基础框架使用 **TabooLib 6.3.0-0e3a911**，Gradle 构建插件 **2.0.39**。不需要安装旧版独立 TabooLib 插件。

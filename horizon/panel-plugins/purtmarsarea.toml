@@ -1,0 +1,17 @@
+title = "PurtmarsArea"
+description = "检查领地存档状态、拦截计数和最近的爆炸保护记录"
+
+[[actions]]
+id = "status"
+label = "领地状态"
+command = "purtmarsarea status"
+
+[[actions]]
+id = "mirror"
+label = "拦截计数"
+command = "purtmarsarea mirror"
+
+[[actions]]
+id = "explosions"
+label = "爆炸记录"
+command = "purtmarsarea explosions"
