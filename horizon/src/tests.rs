@@ -65,6 +65,30 @@ fn falling_rules_distinguish_the_original_claim_from_external_or_unknown_origins
 }
 
 #[test]
+fn devices_use_saved_owner_and_member_uuids_without_a_live_player_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().into());
+    let mut claim = area(1, [0, 64, 0], 8);
+    claim.flags.insert(Flag::Build, false);
+    claim.members.insert(
+        GUEST.to_string(),
+        Member {
+            name: "FormerName".into(),
+            flags: [(Flag::Build, true)].into(),
+        },
+    );
+    service.index.add(claim).unwrap();
+    let dim = "minecraft:overworld";
+    let stranger = Uuid::from_u128(3);
+    assert!(service.allows_device_placement(OWNER, None, false, dim, [0, 63, 0]));
+    assert!(service.allows_device_placement(GUEST, None, false, dim, [0, 63, 0]));
+    assert!(!service.allows_device_placement(stranger, None, false, dim, [0, 63, 0]));
+    assert!(service.allows_device_placement(stranger, None, true, dim, [0, 63, 0]));
+    assert!(!service.allows_device_placement(OWNER, None, true, dim, [0, 64, 0]));
+}
+
+#[test]
 fn projectile_veto_matches_only_the_original_damage_attempt() {
     use crate::combat::{Shot, target_flag};
     use mod_api::entity::health::HurtSource;

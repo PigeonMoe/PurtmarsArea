@@ -486,6 +486,24 @@ impl Hooks for Mod {
         )
     }
 
+    fn device_placement_pre(
+        &self,
+        host: &dyn mod_api::Host,
+        event: &mut mod_api::DevicePlacementPreEvent<'_>,
+    ) -> Flow {
+        let uuid = Uuid::from_u128(event.owner);
+        let online_name = host
+            .player(event.owner)
+            .and_then(|player| player.name(host));
+        flow(!self.service().allows_device_placement(
+            uuid,
+            online_name.as_deref(),
+            event.operator,
+            event.dimension,
+            event.pos,
+        ))
+    }
+
     fn inventory_move_item(
         &self,
         host: &dyn mod_api::Host,

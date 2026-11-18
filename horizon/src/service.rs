@@ -168,6 +168,31 @@ impl Service {
         )
     }
 
+    pub fn allows_device_placement(
+        &self,
+        uuid: Uuid,
+        online_name: Option<&str>,
+        operator: bool,
+        dimension: &str,
+        pos: Point,
+    ) -> bool {
+        if self.store.is_none() {
+            return true;
+        }
+        let name = online_name.or_else(|| {
+            self.known_players
+                .values()
+                .find(|(known, _)| *known == uuid)
+                .map(|(_, name)| name.as_str())
+        });
+        let actor = Actor {
+            uuid,
+            name: name.unwrap_or_default().to_owned(),
+            operator,
+        };
+        self.core(dimension, pos).is_none() && self.allowed(&actor, dimension, pos, Flag::Build)
+    }
+
     pub fn natural(&self, dimension: &str, pos: Point, flag: Flag) -> bool {
         let Ok(config) = self.ready() else {
             return false;
