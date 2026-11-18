@@ -4,6 +4,7 @@ mod commands;
 mod cores;
 mod menu;
 mod model;
+mod presentation;
 mod service;
 mod store;
 
@@ -12,11 +13,11 @@ mod tests;
 
 use mod_api::{
     BlockSpreadEvent, BreakBlockEvent, EntityPlaceEvent, ExplosionDetonateEvent, FillBucketEvent,
-    Flow, Hooks, HostSide, InteractionResult, ItemPickedUpEvent, LevelDimension, LevelHost,
-    PistonPreEvent, Placement, PlayerLoggedInEvent, PlayerLoggedOutEvent, PlayerMoveEvent,
-    PlayerRef, RegisterCommandsEvent, Registrar, RegistrationContext, RightClickBlockEvent,
-    RunModCommandEvent, ServerHost, ServerStartedEvent, ServerStoppingEvent, ServerTickEvent, Text,
-    TriState,
+    Flow, Hooks, HostBlockStates, HostSide, InteractionResult, ItemPickedUpEvent, LevelDimension,
+    LevelHost, PistonPreEvent, Placement, PlayerLoggedInEvent, PlayerLoggedOutEvent,
+    PlayerMoveEvent, PlayerRef, RegisterCommandsEvent, Registrar, RegistrationContext,
+    RightClickBlockEvent, RunModCommandEvent, ServerHost, ServerStartedEvent, ServerStoppingEvent,
+    ServerTickEvent, Text, TriState,
 };
 use model::{Flag, Point};
 use service::{Actor, Service};
@@ -26,6 +27,7 @@ use uuid::Uuid;
 #[derive(Default)]
 struct Mod {
     service: Arc<Mutex<Service>>,
+    boundary_particle: std::sync::OnceLock<mod_api::ParticleKey>,
     registered_materials: std::sync::OnceLock<std::collections::BTreeSet<String>>,
     slimefun_loaded: std::sync::atomic::AtomicBool,
 }
@@ -33,6 +35,9 @@ struct Mod {
 #[mod_api::horizon_mod]
 impl Hooks for Mod {
     fn register(&self, register: &mut dyn Registrar, context: &RegistrationContext) {
+        let _ = self
+            .boundary_particle
+            .set(register.particle_key("minecraft:end_rod"));
         let config = store::Store::new(data_path()).config();
         let Ok(config) = config else { return };
         let materials: std::collections::BTreeSet<_> = config
@@ -55,10 +60,15 @@ impl Hooks for Mod {
         );
     }
 
-    fn server_started(&self, _: &mut dyn ServerHost, event: &mut ServerStartedEvent) {
+    fn server_started(&self, host: &mut dyn ServerHost, event: &mut ServerStartedEvent) {
         if event.dedicated {
             let mut service = self.service();
             service.start(data_path());
+            if let Some(world) = host.world_dir()
+                && let Err(error) = service.seed_known(&host.instance_dir(), &world)
+            {
+                eprintln!("[PurtmarsArea] 无法读取服务器用户缓存：{error}");
+            }
             service.slimefun_loaded = self
                 .slimefun_loaded
                 .load(std::sync::atomic::Ordering::Relaxed);
@@ -69,10 +79,46 @@ impl Hooks for Mod {
         *self.service() = Service::default();
     }
 
-    fn server_tick(&self, _: &mut dyn ServerHost, _: &mut ServerTickEvent) {
-        let mut service = self.service();
-        service.clicked_cores.clear();
-        service.pending_placements.clear();
+    fn server_tick(&self, host: &mut dyn ServerHost, event: &mut ServerTickEvent) {
+        if matches!(event.phase, mod_api::ServerTickPhase::ServerTickEnd { .. }) {
+            let notices = {
+                let mut service = self.service();
+                service.ticks = service.ticks.saturating_add(1);
+                let oldest_transfer = service.ticks.saturating_sub(200);
+                service
+                    .transit_entities
+                    .retain(|_, tick| *tick >= oldest_transfer);
+                service.clicked_cores.clear();
+                service.pending_placements.clear();
+                std::mem::take(&mut service.pending_notices)
+            };
+            for (id, notice) in notices {
+                if let Some(player) = host.player(id.as_u128()) {
+                    tell(host, player, notice);
+                }
+            }
+            menu::poll_inputs(self, host);
+            presentation::draw_boundaries(self, host);
+        }
+    }
+
+    #[listener(priority = 100)]
+    fn server_chat(
+        &self,
+        _: &mut dyn ServerHost,
+        event: &mut mod_api::ServerChatEvent<'_>,
+    ) -> Flow {
+        flow(menu::capture_input(self, event.player, event.raw_text))
+    }
+
+    fn player_container_open(
+        &self,
+        _: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerContainerOpenEvent<'_>,
+    ) {
+        self.service()
+            .member_inputs
+            .remove(&Uuid::from_u128(event.player));
     }
 
     fn register_commands(&self, _: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
@@ -87,13 +133,9 @@ impl Hooks for Mod {
         if !commands::belongs_to_us(&event.command.literals) {
             return Flow::Continue;
         }
-        if event
-            .command
-            .literals
-            .get(1)
-            .is_some_and(|verb| verb == "menu")
-        {
-            if let Err(error) = menu::at_player(self, host, event.source) {
+        let verb = event.command.literals.get(1).map(String::as_str);
+        if matches!(verb, Some("menu" | "list")) {
+            if let Err(error) = menu::at_player(self, host, event.source, verb == Some("list")) {
                 let _ = host.commands().feedback(message(error));
             }
             return Flow::Cancel;
@@ -122,8 +164,12 @@ impl Hooks for Mod {
     }
 
     fn player_logged_in(&self, _: &mut dyn ServerHost, event: &mut PlayerLoggedInEvent<'_>) {
-        self.service()
-            .remember(Uuid::from_u128(event.player), event.name);
+        let uuid = Uuid::from_u128(event.player);
+        let mut service = self.service();
+        service.connected_players.insert(uuid);
+        if let Err(error) = service.remember(uuid, event.name) {
+            eprintln!("[PurtmarsArea] 无法绑定旧领地账号：{error}");
+        }
     }
 
     fn player_logged_out(&self, _: &mut dyn ServerHost, event: &mut PlayerLoggedOutEvent<'_>) {
@@ -154,7 +200,8 @@ impl Hooks for Mod {
 
     fn entity_place(&self, host: &mut dyn ServerHost, event: &mut EntityPlaceEvent) -> Flow {
         let Some(player) = host.players().acting_player() else {
-            return Flow::Continue;
+            let dimension = host.dimension();
+            return self.protect_natural(dimension, point(event.pos), Flag::Build);
         };
         let Some(dimension) = player.dimension(host) else {
             return Flow::Continue;
@@ -238,9 +285,8 @@ impl Hooks for Mod {
         let dimension = dimension_name(&event.click.dimension);
         let pos = event.click.pos;
         let level = host.level(dimension);
-        let block = level
-            .and_then(|level| level.block(host, pos))
-            .map(|block| block.id(host));
+        let block_key = level.and_then(|level| level.block(host, pos));
+        let block = block_key.map(|key| key.id(host));
         let flag = block.as_deref().and_then(interaction_flag);
         let uuid = Uuid::from_u128(player.uuid());
         {
@@ -251,10 +297,12 @@ impl Hooks for Mod {
         let under = [pos[0], pos[1].saturating_sub(1), pos[2]];
         let slimefun_loaded = self.service().slimefun_loaded;
         let slimefun = slimefun_loaded
-            && matches!(
+            && (matches!(
                 block.as_deref(),
-                Some("minecraft:crafting_table" | "minecraft:oak_fence")
-            )
+                Some("minecraft:crafting_table" | "minecraft:nether_brick_fence")
+            ) || block_key.is_some_and(|key| {
+                host.block_in_tag(key, "minecraft:wooden_fences") == Some(true)
+            }))
             && level
                 .and_then(|level| level.block(host, under))
                 .is_some_and(|block| block.id(host) == "minecraft:dispenser")
@@ -276,7 +324,7 @@ impl Hooks for Mod {
                 if event.click.hand == mod_api::Hand::Main {
                     let area = self.service().core(dimension, pos).map(|area| area.id);
                     if let Some(area) = area
-                        && let Err(error) = menu::open(self, host, player, area, menu::Page::Home)
+                        && let Err(error) = menu::open(self, host, player, menu::Page::Home(area))
                     {
                         tell(host, player, error);
                     }
@@ -315,6 +363,325 @@ impl Hooks for Mod {
         Flow::Continue
     }
 
+    fn container_opened(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::ContainerOpenedEvent<'_>,
+    ) -> Flow {
+        let Some(player) = host.player(event.player) else {
+            return Flow::Continue;
+        };
+        let Some(pos) = event.pos else {
+            return Flow::Continue;
+        };
+        let dimension = host.dimension();
+        let flag = match event.kind {
+            "minecraft:anvil" => Flag::Anvil,
+            "minecraft:enchantment" | "minecraft:enchanting" => Flag::Enchant,
+            "minecraft:merchant" => Flag::Trade,
+            _ => Flag::Container,
+        };
+        let paired = if flag == Flag::Container {
+            chest_partner(host, dimension, pos)
+        } else {
+            None
+        };
+        if self.check(host, player, dimension, pos, flag) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        paired.map_or(Flow::Continue, |other| {
+            self.check(host, player, dimension, other, flag)
+        })
+    }
+
+    fn player_harmful_potion_target(
+        &self,
+        host: &dyn mod_api::Host,
+        event: &mut mod_api::PlayerHarmfulPotionTargetEvent<'_>,
+    ) -> Flow {
+        let Some(player) = host.player(event.player) else {
+            return Flow::Continue;
+        };
+        let pos = block_position(event.position);
+        let mut service = self.service();
+        if service.store.is_none() {
+            return Flow::Continue;
+        }
+        if event.target_kind == "minecraft:player" {
+            let source_dim = player
+                .dimension(host)
+                .map(|dimension| dimension.to_string());
+            let source_pos = player.entity().block_position(host);
+            let safe_source = source_dim
+                .zip(source_pos)
+                .is_none_or(|(dimension, source)| service.natural(&dimension, source, Flag::Pvp));
+            return flow(!safe_source || !service.natural(event.dimension, pos, Flag::Pvp));
+        }
+        let flag = if hostile(event.target_kind) {
+            Flag::DamageMonster
+        } else {
+            Flag::DamageAnimals
+        };
+        let Some(actor) = actor(host, player) else {
+            return Flow::Continue;
+        };
+        if !service.allowed(&actor, event.dimension, pos, flag) {
+            service.queue_denial(actor.uuid, flag);
+            return Flow::Cancel;
+        }
+        Flow::Continue
+    }
+
+    fn block_dispense_pre(
+        &self,
+        _: &dyn mod_api::Host,
+        event: &mut mod_api::BlockDispensePreEvent<'_>,
+    ) -> Flow {
+        let service = self.service();
+        flow(
+            service.store.is_some()
+                && (!service.natural(event.dimension, event.pos, Flag::RedstonePerform)
+                    || service.core(event.dimension, event.target).is_some()
+                    || service.crosses(event.dimension, event.pos, event.target)
+                    || !service.natural(event.dimension, event.target, Flag::RedstonePerform)),
+        )
+    }
+
+    fn inventory_move_item(
+        &self,
+        host: &dyn mod_api::Host,
+        event: &mut mod_api::InventoryMoveItemEvent<'_>,
+    ) -> Flow {
+        let dimension = host.dimension();
+        let service = self.service();
+        flow(
+            service.store.is_some()
+                && (service.crosses(dimension, event.source, event.destination)
+                    || !service.natural(dimension, event.source, Flag::RedstonePerform)
+                    || !service.natural(dimension, event.destination, Flag::RedstonePerform)),
+        )
+    }
+
+    fn hanging_break(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::HangingBreakEvent<'_>,
+    ) -> Flow {
+        let dimension = host.dimension();
+        let player = event.player.and_then(|id| host.player(id));
+        self.entity_action(host, player, dimension, event.pos, Flag::Build)
+    }
+
+    fn hanging_place(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::HangingPlaceEvent<'_>,
+    ) -> Flow {
+        let dimension = host.dimension();
+        let player = host.player(event.player);
+        self.entity_action(host, player, dimension, event.pos, Flag::Build)
+    }
+
+    fn vehicle_client_move_pre(
+        &self,
+        host: &dyn mod_api::Host,
+        event: &mut mod_api::VehicleClientMovePreEvent<'_>,
+    ) -> Flow {
+        let from = block_position(event.from);
+        let to = block_position(event.to);
+        let mut service = self.service();
+        if service.store.is_none() || !service.crosses(event.dimension, from, to) {
+            return Flow::Continue;
+        }
+        let passengers = host
+            .entity(event.vehicle)
+            .and_then(|entity| entity.indirect_passengers(host))
+            .unwrap_or_default();
+        let rider = service
+            .connected_players
+            .iter()
+            .filter_map(|uuid| host.player(uuid.as_u128()))
+            .filter(|player| {
+                player.uuid() != event.player && passengers.contains(&player.entity())
+            });
+        let denied = host
+            .player(event.player)
+            .into_iter()
+            .chain(rider)
+            .filter_map(|player| actor(host, player))
+            .find(|actor| !service.allowed(actor, event.dimension, to, Flag::Move));
+        if let Some(actor) = denied {
+            service.queue_denial(actor.uuid, Flag::Move);
+            return Flow::Cancel;
+        }
+        Flow::Continue
+    }
+
+    fn entity_mount(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityMountEvent<'_>,
+    ) -> Flow {
+        if !event.mounting {
+            return Flow::Continue;
+        }
+        let Some(player) = player_entity(host, event.entity) else {
+            return Flow::Continue;
+        };
+        let Some(pos) = host
+            .entity(event.vehicle)
+            .and_then(|vehicle| vehicle.block_position(host))
+        else {
+            return Flow::Continue;
+        };
+        self.check(host, player, event.dimension, pos, Flag::Container)
+    }
+
+    fn sign_changed(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::SignChangedEvent<'_>,
+    ) -> Flow {
+        let Some(player) = host.player(event.player) else {
+            return Flow::Continue;
+        };
+        self.check(host, player, event.dimension, event.pos, Flag::Build)
+    }
+
+    fn entity_change_block_pre(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityChangeBlockPreEvent<'_>,
+    ) -> Flow {
+        let dimension = host.dimension();
+        if self.service().core(dimension, event.pos).is_some() {
+            return Flow::Cancel;
+        }
+        let player = event.player.and_then(|id| host.player(id));
+        self.entity_action(host, player, dimension, event.pos, Flag::Build)
+    }
+
+    fn sponge_absorb_pre(
+        &self,
+        _: &dyn LevelHost,
+        event: &mut mod_api::SpongeAbsorbPreEvent,
+    ) -> Flow {
+        self.protect_natural(
+            dimension_name(&event.dimension),
+            point(event.pos),
+            Flag::Water,
+        )
+    }
+
+    fn block_fade(&self, _: &dyn LevelHost, event: &mut mod_api::BlockFadeEvent) -> Flow {
+        flow(
+            self.service()
+                .core(dimension_name(&event.dimension), point(event.pos))
+                .is_some(),
+        )
+    }
+
+    fn block_form(&self, _: &dyn LevelHost, event: &mut mod_api::BlockFormEvent) -> Flow {
+        flow(
+            self.service()
+                .core(dimension_name(&event.dimension), point(event.pos))
+                .is_some(),
+        )
+    }
+
+    fn block_burn(&self, _: &dyn LevelHost, event: &mut mod_api::BlockBurnEvent) -> Flow {
+        self.protect_natural(
+            dimension_name(&event.dimension),
+            point(event.pos),
+            Flag::Fire,
+        )
+    }
+
+    fn block_ignite(&self, _: &dyn LevelHost, event: &mut mod_api::BlockIgniteEvent<'_>) -> Flow {
+        let dimension = dimension_name(&event.dimension);
+        let pos = point(event.pos);
+        if event.player.is_some() {
+            // The player's use-on permission was checked against both blocks in right_click_block.
+            flow(self.service().core(dimension, pos).is_some())
+        } else {
+            self.protect_natural(dimension, pos, Flag::Fire)
+        }
+    }
+
+    fn tnt_primed(&self, host: &mut dyn ServerHost, event: &mut mod_api::TntPrimedEvent) -> Flow {
+        self.protect_natural(host.dimension(), event.pos, Flag::Explosion)
+    }
+
+    fn crop_grow_pre(
+        &self,
+        _: &mut dyn mod_api::LevelRandomHost,
+        event: &mut mod_api::CropGrowPreEvent<'_>,
+    ) {
+        if self
+            .service()
+            .core(dimension_name(&event.dimension), point(event.pos))
+            .is_some()
+        {
+            *event.result = TriState::False;
+        }
+    }
+
+    fn block_grow_feature(
+        &self,
+        _: &mut dyn mod_api::LevelRandomHost,
+        event: &mut mod_api::BlockGrowFeatureEvent<'_>,
+    ) -> Flow {
+        flow(
+            self.service()
+                .core(dimension_name(&event.dimension), point(event.pos))
+                .is_some(),
+        )
+    }
+
+    fn entity_travel_to_dimension(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityTravelToDimensionEvent<'_>,
+    ) -> Flow {
+        // Fresh insertion at a portal is travel, not CreatureSpawnEvent.
+        if let Some(uuid) = event.entity.uuid(host) {
+            let mut service = self.service();
+            let tick = service.ticks;
+            service.transit_entities.insert(uuid, tick);
+        }
+        Flow::Continue
+    }
+
+    fn entity_join_level(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityJoinLevelEvent<'_>,
+    ) -> Flow {
+        if event.loaded_from_disk {
+            return Flow::Continue;
+        }
+        let Some(entity) = host.entity(event.entity) else {
+            return Flow::Continue;
+        };
+        let category = entity.classification(host);
+        if category.is_none() || category == Some(mod_api::MobCategory::Misc) {
+            return Flow::Continue;
+        }
+        let uuid = entity.uuid(host);
+        let mut service = self.service();
+        if service.store.is_none()
+            || uuid.is_some_and(|id| service.transit_entities.remove(&id).is_some())
+        {
+            return Flow::Continue;
+        }
+        let flag = if hostile(event.kind) {
+            Flag::SpawnMonster
+        } else {
+            Flag::SpawnAnimals
+        };
+        flow(!service.natural(event.dimension, block_position(event.pos), flag))
+    }
+
     fn fill_bucket(&self, host: &mut dyn ServerHost, event: &mut FillBucketEvent<'_>) -> Flow {
         let Some(player) = host.players().acting_player() else {
             return Flow::Continue;
@@ -347,26 +714,88 @@ impl Hooks for Mod {
         }
         let result = self.check(host, player, dimension, to, Flag::Move);
         if result == Flow::Continue {
-            let owner = {
-                let mut service = self.service();
-                if service.crosses(dimension, from, to) {
-                    service
-                        .at(dimension, to)
-                        .or_else(|| service.at(dimension, from))
-                        .map(|a| a.id)
-                        .and_then(|id| service.occupation(Uuid::from_u128(event.player), id))
-                } else {
-                    None
-                }
-            };
-            if let Some(owner) = owner {
-                let _ = player.action_bar(
-                    host,
-                    Text::literal(format!("私人领地 · 已被 {owner} 占领.")),
-                );
-            }
+            self.transition(host, player, dimension, from, dimension, to);
         }
         result
+    }
+
+    fn teleport_command(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::TeleportCommandEvent<'_>,
+    ) -> Flow {
+        let Some(player) = player_entity(host, event.entity) else {
+            return Flow::Continue;
+        };
+        let Some(origin) = player.dimension(host) else {
+            return Flow::Continue;
+        };
+        self.teleport(
+            host,
+            player,
+            (&origin.to_string(), block_position(event.from)),
+            (event.dimension, block_position(*event.to)),
+        )
+    }
+
+    fn player_teleport_pre(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerTeleportPreEvent<'_>,
+    ) -> Flow {
+        let Some(player) = host.player(event.player) else {
+            return Flow::Continue;
+        };
+        self.teleport(
+            host,
+            player,
+            (event.from_level, block_position(event.from)),
+            (event.to_level, block_position(event.to)),
+        )
+    }
+
+    fn player_changed_dimension(
+        &self,
+        _: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerChangedDimensionEvent<'_>,
+    ) {
+        self.service()
+            .member_inputs
+            .remove(&Uuid::from_u128(event.player));
+    }
+
+    fn player_drop_pre(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerDropPreEvent<'_>,
+    ) -> Flow {
+        let Some(player) = host.player(event.player) else {
+            return Flow::Continue;
+        };
+        self.check(
+            host,
+            player,
+            event.dimension,
+            block_position(event.position),
+            Flag::Drop,
+        )
+    }
+
+    fn player_pickup_arrow_pre(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerPickupArrowPreEvent<'_>,
+    ) -> Flow {
+        let Some(player) = host.player(event.player) else {
+            return Flow::Continue;
+        };
+        self.check(
+            host,
+            player,
+            event.dimension,
+            block_position(event.position),
+            Flag::Pick,
+        )
     }
 
     fn bucket_empty(
@@ -398,8 +827,14 @@ impl Hooks for Mod {
         let dimension = host.dimension();
         let pos = block_position(event.pos);
         if event.kind == "minecraft:player" {
+            let source_pos = player.entity().block_position(host);
             let service = self.service();
-            return flow(service.store.is_some() && !service.natural(dimension, pos, Flag::Pvp));
+            return flow(
+                service.store.is_some()
+                    && (!service.natural(dimension, pos, Flag::Pvp)
+                        || source_pos
+                            .is_some_and(|source| !service.natural(dimension, source, Flag::Pvp))),
+            );
         }
         let flag = if entity_inventory(event.kind) || event.kind == "minecraft:painting" {
             Flag::Build
@@ -486,45 +921,20 @@ impl Hooks for Mod {
         )
     }
 
-    fn hopper_pickup_item(
+    fn hopper_pickup_item_pre(
         &self,
         _: &dyn LevelHost,
-        event: &mut mod_api::HopperPickupItemEvent<'_>,
+        event: &mut mod_api::HopperPickupItemPreEvent<'_>,
     ) -> Flow {
+        let dimension = dimension_name(&event.dimension);
+        let pos = point(event.pos);
+        let source = block_position(event.source);
         let service = self.service();
         flow(
             service.store.is_some()
-                && !service.natural(
-                    dimension_name(&event.dimension),
-                    point(event.pos),
-                    Flag::RedstonePerform,
-                ),
+                && (service.crosses(dimension, source, pos)
+                    || !service.natural(dimension, pos, Flag::RedstonePerform)),
         )
-    }
-
-    fn hopper_inventory_search(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut mod_api::HopperInventorySearchEvent,
-    ) {
-        let Some(target) = event.container.or_else(|| {
-            event
-                .entity
-                .and_then(|id| host.entity(id))
-                .and_then(|entity| entity.block_position(host))
-        }) else {
-            return;
-        };
-        let dim = host.dimension();
-        let service = self.service();
-        if service.store.is_some()
-            && (service.crosses(dim, event.hopper, target)
-                || !service.natural(dim, event.hopper, Flag::RedstonePerform)
-                || !service.natural(dim, target, Flag::RedstonePerform))
-        {
-            event.container = None;
-            event.entity = None;
-        }
     }
 
     fn item_picked_up(&self, host: &mut dyn ServerHost, event: &mut ItemPickedUpEvent<'_>) {
@@ -617,7 +1027,7 @@ impl Mod {
             let service = self.service();
             let config = service.ready()?;
             let area = service.index.areas.get(&id).ok_or("领地已发生变化")?;
-            if !actor.manages(area) {
+            if !actor.manages(&config.settings, area) {
                 return Err("只有领地主人或管理员可以管理".into());
             }
             if area.volumes.len() > 1 && area.volumes[0].core_pos == pos {
@@ -625,7 +1035,7 @@ impl Mod {
             }
             let volume = area.core(pos).ok_or("领地核心已发生变化")?;
             let core = config.cores.get(&volume.core).ok_or("无法读取核心配置")?;
-            cores::build(host, &core.drop, &volume.core, 1, true)?
+            cores::build(host, &core.drop_item(), &volume.core, 1, true)?
         };
         if !level.remove_block(host, pos, false) {
             return Err("无法拆除领地核心".into());
@@ -646,6 +1056,75 @@ impl Mod {
                 .map_err(|err| format!("无法发放破碎核心：{err:?}"))?;
         }
         Ok(())
+    }
+
+    fn teleport(
+        &self,
+        host: &mut dyn ServerHost,
+        player: PlayerRef,
+        from: (&str, Point),
+        to: (&str, Point),
+    ) -> Flow {
+        if self.check(host, player, from.0, from.1, Flag::Teleport) == Flow::Cancel
+            || self.check(host, player, to.0, to.1, Flag::Teleport) == Flow::Cancel
+            || self.check(host, player, to.0, to.1, Flag::Move) == Flow::Cancel
+        {
+            return Flow::Cancel;
+        }
+        self.transition(host, player, from.0, from.1, to.0, to.1);
+        Flow::Continue
+    }
+
+    fn transition(
+        &self,
+        host: &mut dyn ServerHost,
+        player: PlayerRef,
+        from_dim: &str,
+        from: Point,
+        to_dim: &str,
+        to: Point,
+    ) {
+        let uuid = Uuid::from_u128(player.uuid());
+        let owner = {
+            let mut service = self.service();
+            let from = service.at(from_dim, from).map(|area| area.id);
+            let to = service.at(to_dim, to).map(|area| area.id);
+            if from_dim != to_dim || from != to {
+                service.member_inputs.remove(&uuid);
+            }
+            if from != to {
+                to.or(from).and_then(|id| service.occupation(uuid, id))
+            } else {
+                None
+            }
+        };
+        if let Some(owner) = owner {
+            presentation::occupation(host, player, &owner);
+        }
+    }
+
+    fn protect_natural(&self, dimension: &str, pos: Point, flag: Flag) -> Flow {
+        let service = self.service();
+        flow(
+            service.store.is_some()
+                && (service.core(dimension, pos).is_some()
+                    || !service.natural(dimension, pos, flag)),
+        )
+    }
+
+    fn entity_action(
+        &self,
+        host: &mut dyn ServerHost,
+        player: Option<PlayerRef>,
+        dimension: &str,
+        pos: Point,
+        flag: Flag,
+    ) -> Flow {
+        if let Some(player) = player {
+            return self.check(host, player, dimension, pos, flag);
+        }
+        let service = self.service();
+        flow(service.store.is_some() && !service.natural(dimension, pos, flag))
     }
 
     fn check(
@@ -698,14 +1177,24 @@ fn data_path() -> std::path::PathBuf {
         .unwrap_or_else(|| "plugins/PurtmarsArea".into())
 }
 
-fn actor(host: &dyn ServerHost, player: PlayerRef) -> Option<Actor> {
+fn actor(host: &dyn mod_api::Host, player: PlayerRef) -> Option<Actor> {
     Some(Actor {
         uuid: Uuid::from_u128(player.uuid()),
         name: player.name(host)?,
-        admin: player
-            .permission_level(host)
-            .is_some_and(|level| level >= 2),
+        operator: player.permission_level(host).is_some_and(|level| level > 0),
     })
+}
+
+fn player_entity(host: &dyn ServerHost, id: u32) -> Option<PlayerRef> {
+    host.players()
+        .acting_player()
+        .filter(|player| player.entity().id() == id)
+        .or_else(|| {
+            host.players()
+                .server_players()
+                .into_iter()
+                .find(|player| player.entity().id() == id)
+        })
 }
 
 fn block_position(pos: [f64; 3]) -> Point {
@@ -868,4 +1357,28 @@ fn modifies_block(host: &dyn ServerHost, item: &str) -> bool {
                 | "glass_bottle"
                 | "shears"
         )
+}
+
+fn chest_partner(host: &dyn ServerHost, dimension: &str, pos: Point) -> Option<Point> {
+    let level = host.level(dimension)?;
+    let state = level.block_state(host, pos)?;
+    let block = state.block().id(host);
+    if !block.ends_with("chest") || block.ends_with("ender_chest") {
+        return None;
+    }
+    let metadata = host.block_states();
+    let sign = match state.property(&metadata, "type").ok().flatten()? {
+        "left" => 1,
+        "right" => -1,
+        _ => return None,
+    };
+    let [dx, dz] = match state.property(&metadata, "facing").ok().flatten()? {
+        "north" => [sign, 0],
+        "east" => [0, sign],
+        "south" => [-sign, 0],
+        "west" => [0, -sign],
+        _ => return None,
+    };
+    let partner = [pos[0] + dx, pos[1], pos[2] + dz];
+    (level.block_state(host, partner)?.block() == state.block()).then_some(partner)
 }

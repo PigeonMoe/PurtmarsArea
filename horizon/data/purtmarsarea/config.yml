@@ -5,6 +5,8 @@ Settings:
   MaxRadius: 128
   MaxSideLength: 256
   MemberInputTimeout: 60
+  # 按玩家 UUID 设置管理、绕过和创建领地权限。
+  PermissionNodes: {}
   # 荒地中的禁止操作，领地核心仍可放置。
   ClaimWorld: {}
   IgnoreFlags: [teleport]

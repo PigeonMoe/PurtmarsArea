@@ -4,14 +4,13 @@ Horizon 26.3 原生服务端插件预览。Rust 插件实现位于本目录，Pa
 
 ## 在 PigeonMoe Horizon 上构建
 
-`v2.1.1-horizon.2` 的 `purtmarsarea.hmod` 是原生源码包，对应 PigeonMoe 服务端预览版 `pigeon-horizon-v0.1.0-preview.1`，引擎提交 `96addbc4b2e07f8241d403ac5522f0baefcc4972`。为此提交可以自行构建并使用本地、未签名的开发版 SDK。生成的服务端运行时与执行构建的操作系统和 CPU 架构匹配。以下以 Linux 或 macOS 终端为例。
+Horizon.3 的 `purtmarsarea.hmod` 是原生源码包，对应 PigeonMoe Horizon 引擎提交 `f5542714eda9b8fa1157435ae8b3e992d188cd5e`。使用该源码构建本地开发 SDK。生成的服务端运行时与执行构建的操作系统和 CPU 架构匹配。以下命令以 Linux 或 macOS 为例。
 
 先准备可运行的 `horizon-launcher`、Rustup、Python 3.11 或更新版本、JDK 25、兼容的 Minecraft Java Edition 26.3 客户端安装和对应的 26.3 服务端 JAR。使用绝对路径设置 `MINECRAFT_DIR` 及 `SERVER_JAR`。
 
 ```sh
-git clone --branch pigeon-horizon-v0.1.0-preview.1 https://github.com/PigeonMoe/horizon.git pigeon-horizon
-cd pigeon-horizon
-test "$(git rev-parse HEAD)" = 96addbc4b2e07f8241d403ac5522f0baefcc4972
+cd /absolute/path/to/pigeon-horizon
+git switch --detach f5542714eda9b8fa1157435ae8b3e992d188cd5e
 export RUSTUP_TOOLCHAIN="$(cat tools/ci/rust-version)"  # 1.99.1
 rustup toolchain install "$RUSTUP_TOOLCHAIN"
 rustup component add rust-src --toolchain "$RUSTUP_TOOLCHAIN"
@@ -38,7 +37,7 @@ horizon-launcher prepare --version "$DEVELOPER_TAG" --minecraft "$MINECRAFT_DIR"
 python3 tools/prebuilt_game.py build "$SDK_DIR" --server
 ```
 
-将发布的 `purtmarsarea.hmod` 解包到新的目录 `MOD_DIR`，确保该目录直接包含 `horizon-mod.toml` 和 `Cargo.toml`。选择尚不存在的绝对路径 `EXPORT_DIR`。启动器使用与开发版相同的提交、主机架构和 Rust 版本校验本地 SDK，然后导出已链接原生插件的专用引擎。
+将 `purtmarsarea.hmod` 解包到新的目录 `MOD_DIR`，确保该目录直接包含 `horizon-mod.toml` 和 `Cargo.toml`。选择尚不存在的绝对路径 `EXPORT_DIR`。启动器使用与开发版相同的提交、主机架构和 Rust 版本校验本地 SDK，然后导出已链接原生插件的专用引擎。
 
 ```sh
 mkdir "$MOD_DIR"
@@ -50,7 +49,7 @@ target/release/horizon-server --dir "$SERVER_DIR" config set "engine.path=$EXPOR
 
 如果服务目录已经显式设置 `engine.resources`，请确认它仍指向兼容的 26.3 资源。新导出目录的资源位于 `$EXPORT_DIR/.local/horizon-client/26.3`。
 
-随后按服务端维护流程重启进程。通过受访问密钥保护的 `GET /api/v1/mods` 核对加载的 `purtmarsarea` ID。开发版的提交要求严格匹配，因此请配套使用 Horizon.2 和指定的 PigeonMoe 预览引擎。Horizon.1 源码包对应原上游提交。
+随后按服务端维护流程重启进程。通过受访问密钥保护的 `GET /api/v1/mods` 核对加载的 `purtmarsarea` ID。开发版的提交要求严格匹配。Horizon.2 源码包对应服务端预览版 `pigeon-horizon-v0.1.0-preview.1`，Horizon.1 源码包对应原上游提交。
 
 在工作区对照同一提交的 API 源码执行测试：
 
@@ -60,13 +59,25 @@ ln -s /absolute/path/to/pigeon-horizon .horizon/sdk/api
 cargo test --locked
 ```
 
-官方构建流程见 [开发版 SDK](https://github.com/PigeonMoe/horizon/blob/pigeon-horizon-v0.1.0-preview.1/docs/modding/src/how-to/native-mods/07-local-developer-builds.md) 和 [原生服务端导出](https://github.com/PigeonMoe/horizon/blob/pigeon-horizon-v0.1.0-preview.1/docs/modding/src/how-to/native-mods/12-standalone-server-export.md)。
+构建流程见匹配引擎仓库中的 `docs/modding/src/how-to/native-mods/07-local-developer-builds.md` 和 `docs/modding/src/how-to/native-mods/12-standalone-server-export.md`。
 
 ## 配置与存档
 
-启动时从服务目录的 `plugins/PurtmarsArea` 读取 `config.yml` 和 `areas.yml`，也可以用环境变量 `PURTMARSAREA_DATA_DIR` 指定目录。缺少配置时使用编译内置的 `data/purtmarsarea/config.yml`。自定义核心材质需要重启引擎，以便注册放置完成回调。默认维度映射为 `world`、`world_nether`、`world_the_end`。如原存档的世界名称不同，请配置 `Settings.WorldAliases`，每项使用 Horizon 维度 ID 为键、既有存档的世界名称为值。
+启动时从服务目录的 `plugins/PurtmarsArea` 读取 `config.yml` 和 `areas.yml`，也可以用环境变量 `PURTMARSAREA_DATA_DIR` 指定目录。缺少 `config.yml` 时从包内的默认配置生成文件。自定义核心材质需要重启引擎，以便注册放置完成回调。默认维度映射为 `world`、`world_nether`、`world_the_end`。如原存档的世界名称不同，请配置 `Settings.WorldAliases`，每项使用 Horizon 维度 ID 为键、既有存档的世界名称为值。
 
-旧 Paper `areas.yml` 支持 schema 2/3。原始 `save/<世界名>.yml` 可放在 `legacy-save` 并执行 `/pa import`。同一存档避免两个引擎同时写入。导入前核验旧版仅记录名称的主人和成员，含 UUID 的记录优先按 UUID 匹配。读取失败会锁定插件已接管的保护路径，保留源文件。写入使用同目录原子替换，并留一份上一快照。
+旧 Paper `areas.yml` 支持 schema 2/3。原始 `save/<世界名>.yml` 可放在 `legacy-save` 并执行 `/pa import`。同一存档避免两个引擎同时写入。旧玩家缓存中的名称只有同时存在相应 UUID 的玩家存档时才用于导入；其余仅含名称的记录在玩家以匹配名称进入时绑定 UUID。此后改名仍按 UUID 匹配，已知名称与 UUID 保存在 `known-players.yml`。读取失败会锁定插件已接管的保护路径，保留源文件。领地写入使用同目录原子替换，并留一份上一快照。
+
+`Settings.PermissionNodes` 按玩家 UUID 设置 Paper 权限节点。管理和保护绕过分别默认继承 Horizon 的 OP 状态，普通玩家默认可以创建领地，按世界绕过放置限制默认关闭。以下配置授予一名玩家管理权限和下界创建资格，同时继续对该玩家执行领地保护规则。
+
+```yaml
+Settings:
+  PermissionNodes:
+    '2da65f9c-2d65-450c-a470-873559f17905':
+      PurtmarsArea.command.admin: true
+      PurtmarsArea.bypass: false
+      PurtmarsArea.create: true
+      PurtmarsArea.bypass.world_nether: true
+```
 
 在使用 PigeonMoe Horizon Panel 时，可将 `panel-plugins/purtmarsarea.toml` 复制到服务目录的 `panel-plugins/`。页面在运行时确认插件已加载后提供状态、拦截计数和最近爆炸记录。
 
@@ -75,9 +86,10 @@ cargo test --locked
 | 功能 | 当前实现 |
 | --- | --- |
 | 领地 | 4 种默认核心、三维边界、重叠检查、主人 UUID、成员独立权限、拆除与破碎核心。创建通过 `/pa item` 发放后放置 |
-| 游戏界面 | 核心右键、首页、设置开关及分页、成员列表。进入和离开显示动作栏提示 |
+| 游戏界面 | 核心右键首页，领地与成员分页，成员独立设置及恢复默认，通过私密聊天输入成员名，Shift 点击移除。穿越边界和创建成功时显示领地标题，开启 `particle` 的领地显示边界 |
 | 命令 | `/purtmarsarea`、`/pa`、`/area`。支持信息、列表、菜单、命名、成员管理、权限开关、发放、保存、重载、导入、管理诊断 |
-| 保护 | 玩家方块放置和拆除、桶、常见容器与门、实体交互和近战、地面移动、拾取物品、火与流体蔓延、活塞、漏斗部分路径、爆炸整批方块破坏。Slimefun 当前工作台/栅栏布局也检查下方发射器的领地权限 |
-| 仍待验证或移植 | 传送两端与骑乘、箭矢拾取和防丢弃、完整红石/漏斗与自然生物生成、药水和投射物、落沙和方块形态变化、边界粒子、Paper 权限节点细分、跨重启玩家缓存、完整成员菜单交互及标题字幕 |
+| 玩家保护 | 方块放置和拆除、水桶、双箱、门、实体交互和近战、地面移动和客户端驱动的车辆移动、主动丢弃物品、物品与箭矢拾取。`/tp`、末影珍珠、紫颂果及观察者传送检查原点和落点；喷溅及滞留药水逐目标检查有害效果 |
+| 世界保护 | 火与流体、活塞、自然生物生成、海绵逐方块吸水、漏斗传输及吸入、发射器和投掷器、批量爆炸方块破坏。Slimefun 工位会同时检查下方发射器的领地权限 |
+| Paper 差异 | 待补末地和下界门户的最终落点、服务端驱动的矿车、外来落沙、红石电平更新、部分投射物伤害及施肥多方块变更。Paper 事件接口依赖 Bukkit，Horizon 使用原生 Rust SDK |
 
-预览使用 Horizon OP 等级授予管理和普通保护绕过。已运行 Rust 测试及 Horizon 包校验。本机尚未生成开发版引擎运行时，也没有真实 Minecraft 客户端的验收结果。生产存档先在独立测试环境核验保护路径。
+Rust 测试覆盖边界与重叠、权限与玩家改名、旧存档迁移、存储失败后的保护、爆炸预判和粒子采样。真实 Minecraft 26.3 客户端联测仍待完成。

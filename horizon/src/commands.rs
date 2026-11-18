@@ -8,11 +8,22 @@ use mod_api::{
 };
 
 const ROOTS: [&str; 3] = ["purtmarsarea", "pa", "area"];
+const ADMIN: &[&str] = &[
+    "item",
+    "save",
+    "load",
+    "reload",
+    "import",
+    "mirror",
+    "status",
+    "explosions",
+];
 
 pub fn register(commands: &mut Vec<Command>) {
     for root in ROOTS {
         for usage in [
             "",
+            " help",
             " info",
             " list",
             " menu",
@@ -35,7 +46,7 @@ pub fn register(commands: &mut Vec<Command>) {
             "status",
             "item <core:word> [target:player] [count:integer]",
         ] {
-            commands.push(Command::op(&format!("{root} {usage}"), 2));
+            commands.push(Command::new(&format!("{root} {usage}")));
         }
     }
 }
@@ -54,8 +65,29 @@ pub fn run(
     let command = event.command;
     let subcommand = command.literals.get(1).map(String::as_str).unwrap_or("");
     let mut service = modification.service();
+    let admin = match *event.source {
+        CommandSource::Player { player, .. } => actor(host, player).is_some_and(|actor| {
+            service
+                .config
+                .as_ref()
+                .map_or(actor.operator, |config| actor.admin(&config.settings))
+        }),
+        _ => event.source.permission().level() > 0,
+    };
+    if ADMIN.contains(&subcommand) && !admin {
+        return Err("需要管理员权限".into());
+    }
     let reply = match subcommand {
-        "" => "/pa info | list | add | remove | set | name".into(),
+        "" | "help" => {
+            let mut lines = vec![
+                "领地管理 /pa info | menu | list | add 玩家 | remove 玩家".into(),
+                "/pa set 权限 true/false [成员] | name 名称".into(),
+            ];
+            if admin {
+                lines.push("管理：/pa item 核心编号 [在线玩家] [数量] | save | reload | import | mirror | status | explosions".into());
+            }
+            return Ok(lines);
+        }
         "status" => format!(
             "Horizon | 领地 {} | {}",
             service.index.areas.len(),
@@ -94,7 +126,15 @@ pub fn run(
             service.reload()?;
             format!("已加载 {} 个领地", service.index.areas.len())
         }
-        "import" => format!("已导入 {} 个旧版领地", service.import_legacy()?),
+        "import" => {
+            let online: Vec<_> = host
+                .players()
+                .server_players()
+                .into_iter()
+                .filter_map(|player| actor(host, player).map(|actor| (actor.uuid, actor.name)))
+                .collect();
+            format!("已导入 {} 个旧版领地", service.import_legacy(&online)?)
+        }
         "item" => {
             let id = string(command, "core").ok_or("缺少核心编号")?;
             let target = match command.argument("target") {
@@ -131,62 +171,58 @@ pub fn run(
                 .position(host)
                 .map(block_position)
                 .ok_or("无法读取玩家坐标")?;
-            service.ready()?;
-            if subcommand == "list" {
-                return Ok(service
-                    .index
-                    .areas
-                    .values()
-                    .filter(|a| actor.manages(a))
-                    .map(|a| {
-                        format!(
-                            "{} | {} | {} | {:?}",
-                            a.name, a.owner_name, a.world, a.volumes[0].core_pos
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .chain(std::iter::once("使用 /pa info 查看脚下领地".into()))
-                    .collect());
-            }
+            let config = service.ready()?;
             let area = service
                 .at(&dimension.to_string(), pos)
                 .ok_or("当前位置没有领地")?;
             let area_id = area.id;
-            if !actor.manages(area) && subcommand != "info" {
+            if !actor.manages(&config.settings, area) && subcommand != "info" {
                 return Err("只有领地主人或管理员可以管理".into());
             }
             match subcommand {
-                "info" | "menu" => {
+                "info" => {
                     let v = &area.volumes[0];
-                    format!(
-                        "{} | 主人 {} | {} | X {}..{} Y {}..{} Z {}..{} | 成员 {}",
-                        area.name,
-                        area.owner_name,
-                        area.world,
-                        v.min[0],
-                        v.max[0],
-                        v.min[1],
-                        v.max[1],
-                        v.min[2],
-                        v.max[2],
-                        area.members.len()
-                    )
+                    return Ok(vec![
+                        format!("{} | 主人 {} | ID {}", area.name, area.owner_name, area.id),
+                        format!(
+                            "核心 {} {},{},{} | 大小 {}×{}×{}",
+                            area.world,
+                            v.core_pos[0],
+                            v.core_pos[1],
+                            v.core_pos[2],
+                            v.max[0] - v.min[0] + 1,
+                            v.max[1] - v.min[1] + 1,
+                            v.max[2] - v.min[2] + 1
+                        ),
+                        format!(
+                            "主核心边界 X {}..{} | Y {}..{} | Z {}..{}",
+                            v.min[0], v.max[0], v.min[1], v.max[1], v.min[2], v.max[2]
+                        ),
+                        format!(
+                            "成员：{} | 扩展 {}",
+                            area.members
+                                .values()
+                                .map(|member| member.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            area.volumes.len() - 1
+                        ),
+                    ]);
                 }
                 "add" => {
                     let name = string(command, "member").ok_or("缺少玩家名称")?;
                     if let Some(member) = host.players().player_by_name(name)
                         && let Some(member_name) = member.name(host)
                     {
-                        service.remember(uuid::Uuid::from_u128(member.uuid()), &member_name);
+                        service.remember(uuid::Uuid::from_u128(member.uuid()), &member_name)?;
                     }
                     service.add_member(area_id, &actor, name)?;
                     format!("已添加成员 {name}")
                 }
                 "remove" => {
                     let name = string(command, "member").ok_or("缺少玩家名称")?;
-                    service.change(|index, _| {
-                        let area = manager_area(index, area_id, &actor)?;
+                    service.change(|index, config| {
+                        let area = manager_area(index, area_id, &actor, &config.settings)?;
                         let key = Service::member_key(area, name)?;
                         area.members.remove(&key);
                         Ok(())
@@ -204,7 +240,7 @@ pub fn run(
                         if config.settings.ignore_flags.contains(&flag) {
                             return Err("管理员已锁定该权限".into());
                         }
-                        let area = manager_area(index, area_id, &actor)?;
+                        let area = manager_area(index, area_id, &actor, &config.settings)?;
                         if let Some(name) = member {
                             if !flag.personal() {
                                 return Err("环境权限不能单独设置给成员".into());
@@ -220,15 +256,15 @@ pub fn run(
                         }
                         Ok(())
                     })?;
-                    format!("已设置 {} 为 {value}", flag.key())
+                    format!("已设置 {} 为 {value}", flag.title())
                 }
                 "name" => {
                     let name = string(command, "name").ok_or("缺少领地名称")?.trim();
-                    if name.is_empty() || name.chars().count() > 64 {
-                        return Err("领地名称须包含 1–64 个字符".into());
+                    if name.is_empty() || name.encode_utf16().count() > 32 {
+                        return Err("领地名称须包含 1–32 个字符".into());
                     }
-                    service.change(|index, _| {
-                        manager_area(index, area_id, &actor)?.name = name.into();
+                    service.change(|index, config| {
+                        manager_area(index, area_id, &actor, &config.settings)?.name = name.into();
                         Ok(())
                     })?;
                     format!("领地名称已更新为 {name}")

@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
+pub type KnownPlayers = BTreeMap<String, (Uuid, String)>;
+
 const DEFAULT_CONFIG: &str = include_str!("../data/purtmarsarea/config.yml");
 
 #[derive(Deserialize)]
@@ -22,6 +24,9 @@ pub struct Config {
 pub struct Settings {
     pub enable_world: BTreeSet<String>,
     pub member_limit: usize,
+    pub member_input_timeout: u64,
+    pub particle: Particle,
+    pub permission_nodes: BTreeMap<Uuid, BTreeMap<String, bool>>,
     pub area_limit: usize,
     pub max_radius: i32,
     pub max_side_length: i32,
@@ -36,6 +41,9 @@ impl Default for Settings {
         Self {
             enable_world: BTreeSet::from(["world".into()]),
             member_limit: 100,
+            member_input_timeout: 60,
+            particle: Particle::default(),
+            permission_nodes: BTreeMap::new(),
             area_limit: 10,
             max_radius: 128,
             max_side_length: 256,
@@ -51,7 +59,34 @@ impl Default for Settings {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(default, rename_all = "PascalCase")]
+pub struct Particle {
+    pub period: u64,
+    pub distance: f64,
+    pub range: f64,
+    pub budget: usize,
+}
+impl Default for Particle {
+    fn default() -> Self {
+        Self {
+            period: 2,
+            distance: 1.5,
+            range: 50.0,
+            budget: 500,
+        }
+    }
+}
+
 impl Settings {
+    pub fn permission(&self, uuid: Uuid, node: &str, default: bool) -> bool {
+        self.permission_nodes
+            .get(&uuid)
+            .and_then(|nodes| nodes.get(node))
+            .copied()
+            .unwrap_or(default)
+    }
+
     pub fn default_for(&self, flag: Flag) -> bool {
         self.flags
             .get(&flag)
@@ -67,9 +102,11 @@ impl Settings {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Item {
+    #[serde(default = "default_material")]
     pub material: String,
+    #[serde(default = "default_name")]
     pub name: String,
     #[serde(default)]
     pub lore: Vec<String>,
@@ -83,7 +120,7 @@ pub struct Core {
     size: Option<Axes>,
     #[serde(flatten)]
     pub item: Item,
-    pub drop: Item,
+    drop: Option<Item>,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -100,6 +137,20 @@ impl Axes {
 }
 
 impl Core {
+    pub fn drop_item(&self) -> std::borrow::Cow<'_, Item> {
+        self.drop.as_ref().map_or_else(
+            || {
+                std::borrow::Cow::Owned(Item {
+                    material: "GHAST_TEAR".into(),
+                    name: format!("&7破碎的{}", crate::cores::plain_color(&self.item.name)),
+                    lore: Vec::new(),
+                    shiny: false,
+                })
+            },
+            std::borrow::Cow::Borrowed,
+        )
+    }
+
     pub fn volume(&self, id: &str, pos: Point, settings: &Settings) -> Result<Volume, String> {
         match (self.dimensions, self.size) {
             (Some(dims), None) if dims.array().iter().all(|v| *v <= settings.max_side_length) => {
@@ -176,6 +227,13 @@ struct LegacyArea {
     members: BTreeMap<String, Rules>,
 }
 
+fn default_material() -> String {
+    "WHITE_STAINED_GLASS".into()
+}
+fn default_name() -> String {
+    "领地核心".into()
+}
+
 fn default_core() -> String {
     "0".into()
 }
@@ -198,7 +256,7 @@ fn decode_snapshot<V>(
         if volumes.is_empty()
             || volumes.len() > 257
             || record.world.trim().is_empty()
-            || !player_name(&record.owner_name)
+            || record.owner_name.trim().is_empty()
         {
             return Err(format!("无效领地存档：{id}"));
         }
@@ -251,10 +309,28 @@ impl Store {
         Self { directory }
     }
 
+    pub fn initialise_config(&self) -> io::Result<()> {
+        let path = self.directory.join("config.yml");
+        if path.try_exists()? {
+            return Ok(());
+        }
+        fs::create_dir_all(&self.directory)?;
+        let mut staged = NamedTempFile::new_in(&self.directory)?;
+        staged.write_all(DEFAULT_CONFIG.as_bytes())?;
+        staged.as_file().sync_all()?;
+        match staged.persist_noclobber(path) {
+            Ok(_) => Ok(()),
+            Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+            Err(error) => Err(error.error),
+        }
+    }
+
     pub fn config(&self) -> Result<Config, String> {
         let path = self.directory.join("config.yml");
         let contents = read_optional(&path)?.unwrap_or_else(|| DEFAULT_CONFIG.into());
-        let config: Config = decode(&contents)?;
+        let mut config: Config = decode(&contents)?;
+        config.settings.max_radius = config.settings.max_radius.min(128);
+        config.settings.max_side_length = config.settings.max_side_length.min(256);
         if config.cores.is_empty()
             || !(1..=128).contains(&config.settings.max_radius)
             || !(1..=256).contains(&config.settings.max_side_length)
@@ -268,14 +344,30 @@ impl Store {
         }
         for (id, core) in &config.cores {
             core.volume(id, [0; 3], &config.settings)?;
-            if [&core.item, &core.drop]
-                .iter()
+            if std::iter::once(&core.item)
+                .chain(&core.drop)
                 .any(|item| item.material.is_empty() || item.name.is_empty())
             {
                 return Err(format!("核心 {id} 的物品配置无效"));
             }
         }
         Ok(config)
+    }
+
+    pub fn load_known(&self) -> Result<KnownPlayers, String> {
+        read_optional(&self.directory.join("known-players.yml"))?
+            .map_or_else(|| Ok(KnownPlayers::new()), |content| decode(&content))
+    }
+
+    pub fn save_known(&self, players: &KnownPlayers) -> Result<(), String> {
+        let data = serde_yaml_ng::to_string(players).map_err(|err| err.to_string())?;
+        fs::create_dir_all(&self.directory).map_err(|err| err.to_string())?;
+        persist(
+            &self.directory,
+            &self.directory.join("known-players.yml"),
+            data.as_bytes(),
+        )
+        .map_err(|err| err.to_string())
     }
 
     pub fn load(&self) -> Result<AreaIndex, String> {
@@ -379,7 +471,7 @@ impl Store {
                     .ok()
                     .and_then(|parts| parts.try_into().ok())
                     .ok_or_else(|| format!("无效旧坐标：{location}"))?;
-                if !player_name(&record.owner) {
+                if record.owner.trim().is_empty() {
                     return Err(format!("无效旧领地主人：{}", record.owner));
                 }
                 let volume = Volume::legacy(pos, record.size.array(), record.index.to_string())?;
@@ -391,9 +483,6 @@ impl Store {
                         .or_insert_with(|| settings.default_for(flag));
                 }
                 for (name, flags) in record.members {
-                    if !player_name(&name) {
-                        return Err(format!("无效旧成员：{name}"));
-                    }
                     area.members
                         .insert(name.to_ascii_lowercase(), Member { name, flags });
                 }
@@ -426,4 +515,30 @@ fn persist(directory: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     staging.as_file().sync_all()?;
     staging.persist(path).map_err(|e| e.error)?;
     Ok(())
+}
+
+pub fn known_from_world_cache(instance: &Path, world: &Path) -> Result<KnownPlayers, String> {
+    #[derive(Deserialize)]
+    struct Profile {
+        name: String,
+        uuid: Uuid,
+    }
+    let Some(cache) = read_optional(&instance.join("usercache.json"))? else {
+        return Ok(KnownPlayers::new());
+    };
+    let mut known = KnownPlayers::new();
+    for Profile { name, uuid } in decode::<Vec<Profile>>(&cache)? {
+        if !player_name(&name) {
+            continue;
+        }
+        let file = format!("{uuid}.dat");
+        if world.join("players/data").join(&file).is_file()
+            || world.join("playerdata").join(&file).is_file()
+        {
+            known
+                .entry(name.to_ascii_lowercase())
+                .or_insert((uuid, name));
+        }
+    }
+    Ok(known)
 }

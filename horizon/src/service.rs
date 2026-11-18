@@ -1,9 +1,9 @@
 use crate::{
     model::{Area, AreaIndex, Flag, Member, Point, player_name},
-    store::{Config, Store},
+    store::{Config, KnownPlayers, Settings, Store},
 };
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -12,12 +12,16 @@ use uuid::Uuid;
 pub struct Actor {
     pub uuid: Uuid,
     pub name: String,
-    pub admin: bool,
+    pub operator: bool,
 }
 
 impl Actor {
-    pub fn manages(&self, area: &Area) -> bool {
-        self.admin || area.is_owner(self.uuid, &self.name)
+    pub fn admin(&self, settings: &Settings) -> bool {
+        settings.permission(self.uuid, "PurtmarsArea.command.admin", self.operator)
+    }
+
+    pub fn manages(&self, settings: &Settings, area: &Area) -> bool {
+        self.admin(settings) || area.is_owner(self.uuid, &self.name)
     }
 }
 
@@ -29,11 +33,17 @@ pub struct Service {
     pub error: Option<String>,
     pub denials: BTreeMap<Flag, u64>,
     pub explosions: VecDeque<String>,
-    pub known_players: HashMap<String, (Uuid, String)>,
+    pub known_players: KnownPlayers,
+    known_player_storage_ok: bool,
     pub clicked_cores: HashMap<Uuid, String>,
     pub pending_placements: HashMap<Uuid, Area>,
     pub slimefun_loaded: bool,
     pub menus: HashMap<Uuid, crate::menu::Menu>,
+    pub member_inputs: HashMap<Uuid, crate::menu::MemberInput>,
+    pub ticks: u64,
+    pub transit_entities: HashMap<u128, u64>,
+    pub connected_players: BTreeSet<Uuid>,
+    pub pending_notices: Vec<(Uuid, String)>,
     notices: HashMap<Uuid, Instant>,
     occupations: HashMap<Uuid, (Uuid, Instant)>,
 }
@@ -44,10 +54,49 @@ impl Service {
             store: Some(Store::new(path)),
             ..Self::default()
         };
+        if let Some(store) = &self.store {
+            if let Err(error) = store.initialise_config() {
+                self.error = Some(error.to_string());
+                return;
+            }
+            match store.load_known() {
+                Ok(players) => {
+                    self.known_players = players;
+                    self.known_player_storage_ok = true;
+                }
+                Err(error) => eprintln!("[PurtmarsArea] 无法载入玩家记录：{error}"),
+            }
+        }
         let _ = self.reload();
     }
 
+    pub fn seed_known(
+        &mut self,
+        instance: &std::path::Path,
+        world: &std::path::Path,
+    ) -> Result<(), String> {
+        let known = crate::store::known_from_world_cache(instance, world)?;
+        let mut added = false;
+        for (key, identity) in known {
+            if let std::collections::btree_map::Entry::Vacant(entry) = self.known_players.entry(key)
+            {
+                entry.insert(identity);
+                added = true;
+            }
+        }
+        if added
+            && self.known_player_storage_ok
+            && let Some(store) = &self.store
+        {
+            store.save_known(&self.known_players)?;
+        }
+        Ok(())
+    }
+
     pub fn reload(&mut self) -> Result<(), String> {
+        self.member_inputs.clear();
+        self.occupations.clear();
+        self.menus.clear();
         let store = self.store.as_ref().ok_or("领地插件尚未加载")?;
         match store
             .config()
@@ -57,8 +106,6 @@ impl Service {
                 self.index = index;
                 self.config = Some(config);
                 self.error = None;
-                self.occupations.clear();
-                self.menus.clear();
                 Ok(())
             }
             Err(error) => {
@@ -96,7 +143,10 @@ impl Service {
         let Ok(config) = self.ready() else {
             return false;
         };
-        if actor.admin {
+        if config
+            .settings
+            .permission(actor.uuid, "PurtmarsArea.bypass", actor.operator)
+        {
             return true;
         }
         self.at(dimension, pos).map_or_else(
@@ -145,8 +195,14 @@ impl Service {
         Some(if self.error.is_some() {
             "领地系统已锁定，请联系管理员".into()
         } else {
-            format!("此处不允许：{}", flag.key())
+            format!("此处不允许：{}", flag.title())
         })
+    }
+
+    pub fn queue_denial(&mut self, player: Uuid, flag: Flag) {
+        if let Some(notice) = self.denial(player, flag) {
+            self.pending_notices.push((player, notice));
+        }
     }
 
     pub fn occupation(&mut self, player: Uuid, area: Uuid) -> Option<String> {
@@ -217,7 +273,19 @@ impl Service {
     ) -> Result<Area, String> {
         let config = self.ready()?;
         let world = self.world(dimension);
-        if !config.settings.enable_world.contains(world) {
+        if !config
+            .settings
+            .permission(actor.uuid, "PurtmarsArea.create", true)
+        {
+            return Err("没有创建领地的权限".into());
+        }
+        if !config.settings.enable_world.contains(world)
+            && !config.settings.permission(
+                actor.uuid,
+                &format!("PurtmarsArea.bypass.{world}"),
+                false,
+            )
+        {
             return Err("该世界不允许放置领地核心".into());
         }
         let core = config.cores.get(id).ok_or("未知核心编号")?;
@@ -234,7 +302,7 @@ impl Service {
             .values()
             .filter(|a| a.is_owner(actor.uuid, &actor.name))
             .count();
-        if !actor.admin && owned >= config.settings.area_limit {
+        if !actor.admin(&config.settings) && owned >= config.settings.area_limit {
             return Err("领地数量达到上限".into());
         }
         let mut area = Area::new(
@@ -271,24 +339,56 @@ impl Service {
         })
     }
 
-    pub fn import_legacy(&mut self) -> Result<usize, String> {
+    pub fn import_legacy(&mut self, online: &[(Uuid, String)]) -> Result<usize, String> {
         let store = self.store.clone().ok_or("领地插件尚未加载")?;
-        self.change(|index, config| store.import_legacy(index, &config.settings))
+        self.change(|index, config| {
+            let count = store.import_legacy(index, &config.settings)?;
+            for (uuid, name) in online {
+                bind_legacy(index, *uuid, name);
+            }
+            Ok(count)
+        })
     }
 
-    pub fn remember(&mut self, uuid: Uuid, name: &str) {
-        if player_name(name) {
-            self.known_players
-                .insert(name.to_ascii_lowercase(), (uuid, name.into()));
+    pub fn remember(&mut self, uuid: Uuid, name: &str) -> Result<(), String> {
+        if self.store.is_none() || !player_name(name) {
+            return Ok(());
         }
+        let key = name.to_ascii_lowercase();
+        let identity = (uuid, name.to_owned());
+        if self.known_players.get(&key) != Some(&identity) {
+            self.known_players
+                .retain(|entry, (id, _)| *id != uuid || entry == &key);
+            self.known_players.insert(key.clone(), identity);
+            if self.known_player_storage_ok
+                && let Some(store) = &self.store
+                && let Err(error) = store.save_known(&self.known_players)
+            {
+                eprintln!("[PurtmarsArea] 无法保存玩家记录：{error}");
+            }
+        }
+        if self.error.is_none()
+            && self.index.areas.values().any(|area| {
+                (area.owner.is_none() && area.owner_name.eq_ignore_ascii_case(name))
+                    || area.members.contains_key(&key)
+            })
+        {
+            self.change(|index, _| {
+                bind_legacy(index, uuid, name);
+                Ok(())
+            })?;
+        }
+        Ok(())
     }
 
     pub fn quit(&mut self, uuid: Uuid) {
+        self.connected_players.remove(&uuid);
         self.notices.remove(&uuid);
         self.occupations.remove(&uuid);
         self.clicked_cores.remove(&uuid);
         self.pending_placements.remove(&uuid);
         self.menus.remove(&uuid);
+        self.member_inputs.remove(&uuid);
     }
 
     pub fn member_key(area: &Area, name: &str) -> Result<String, String> {
@@ -309,7 +409,7 @@ impl Service {
             .cloned()
             .ok_or("玩家必须曾经加入此服务器")?;
         self.change(|index, config| {
-            let area = manager_area(index, area_id, actor)?;
+            let area = manager_area(index, area_id, actor, &config.settings)?;
             if area.is_owner(uuid, &name) || area.member(uuid, &name).is_some() {
                 return Err("该玩家已是领地主人或成员".into());
             }
@@ -332,14 +432,28 @@ pub fn manager_area<'a>(
     index: &'a mut AreaIndex,
     id: Uuid,
     actor: &Actor,
+    settings: &Settings,
 ) -> Result<&'a mut Area, String> {
     let area = index
         .areas
         .get_mut(&id)
         .ok_or("领地已发生变化，请重新打开菜单")?;
-    if actor.manages(area) {
+    if actor.manages(settings, area) {
         Ok(area)
     } else {
         Err("只有领地主人或管理员可以管理".into())
+    }
+}
+
+fn bind_legacy(index: &mut AreaIndex, uuid: Uuid, name: &str) {
+    let name_key = name.to_ascii_lowercase();
+    let uuid_key = uuid.to_string();
+    for area in index.areas.values_mut() {
+        if area.owner.is_none() && area.owner_name.eq_ignore_ascii_case(name) {
+            area.owner = Some(uuid);
+        }
+        if let Some(member) = area.members.remove(&name_key) {
+            area.members.entry(uuid_key.clone()).or_insert(member);
+        }
     }
 }

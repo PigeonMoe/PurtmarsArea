@@ -6,7 +6,7 @@ pub type Point = [i32; 3];
 pub type Rules = BTreeMap<Flag, bool>;
 
 macro_rules! flags {
-    ($($name:ident, $key:literal, $default:literal, $personal:literal);+ $(;)?) => {
+    ($($name:ident, $key:literal, $title:literal, $default:literal, $personal:literal);+ $(;)?) => {
         #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
         pub enum Flag {
             $(#[serde(rename = $key)] $name,)+
@@ -17,6 +17,10 @@ macro_rules! flags {
 
             pub fn key(self) -> &'static str {
                 match self { $(Self::$name => $key,)+ }
+            }
+
+            pub fn title(self) -> &'static str {
+                match self { $(Self::$name => $title,)+ }
             }
 
             pub fn default_value(self) -> bool {
@@ -39,32 +43,32 @@ macro_rules! flags {
 }
 
 flags! {
-    Particle, "particle", true, false;
-    Build, "build", false, true;
-    Move, "move", true, true;
-    Teleport, "teleport", true, true;
-    Container, "container", false, true;
-    Enchant, "enchant-table", true, true;
-    Anvil, "anvil", true, true;
-    Door, "door", false, true;
-    Cake, "cake", false, true;
-    Drop, "item-drop", true, true;
-    Pick, "item-pick", true, true;
-    DamageAnimals, "damage-animals", false, true;
-    DamageMonster, "damage-monster", false, true;
-    SpawnAnimals, "spawn-animals", false, false;
-    SpawnMonster, "spawn-monster", false, false;
-    Redstone, "redstone", false, true;
-    RedstonePerform, "redstone-perform", true, false;
-    Lava, "flow-lava", true, false;
-    Water, "flow-water", true, false;
-    Trade, "villager-trade", true, true;
-    Shear, "shear", false, true;
-    Leash, "leash", false, true;
-    Falling, "falling", false, false;
-    Explosion, "explosion", false, false;
-    Fire, "fire", false, false;
-    Pvp, "pvp", true, false;
+    Particle, "particle", "边界粒子", true, false;
+    Build, "build", "建筑与水桶", false, true;
+    Move, "move", "进入与移动", true, true;
+    Teleport, "teleport", "传送", true, true;
+    Container, "container", "容器", false, true;
+    Enchant, "enchant-table", "附魔台", true, true;
+    Anvil, "anvil", "铁砧", true, true;
+    Door, "door", "门与活板门", false, true;
+    Cake, "cake", "蛋糕", false, true;
+    Drop, "item-drop", "丢弃物品", true, true;
+    Pick, "item-pick", "拾取物品与箭", true, true;
+    DamageAnimals, "damage-animals", "伤害被动生物", false, true;
+    DamageMonster, "damage-monster", "伤害敌对生物", false, true;
+    SpawnAnimals, "spawn-animals", "被动生物生成", false, false;
+    SpawnMonster, "spawn-monster", "敌对生物生成", false, false;
+    Redstone, "redstone", "红石触发", false, true;
+    RedstonePerform, "redstone-perform", "红石运作", true, false;
+    Lava, "flow-lava", "岩浆流动", true, false;
+    Water, "flow-water", "水流动", true, false;
+    Trade, "villager-trade", "村民交易", true, true;
+    Shear, "shear", "修剪生物", false, true;
+    Leash, "leash", "牵引生物", false, true;
+    Falling, "falling", "外来方块坠落", false, false;
+    Explosion, "explosion", "爆炸破坏", false, false;
+    Fire, "fire", "火焰蔓延与燃烧", false, false;
+    Pvp, "pvp", "玩家战斗", true, false;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

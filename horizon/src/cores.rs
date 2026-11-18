@@ -1,4 +1,4 @@
-use crate::{Service, message, store::Item, tell};
+use crate::{Service, message, presentation, store::Item, tell};
 use mod_api::{Compound, Identifier, ItemPart, ItemStack, OnBlockPlacedByEvent, ServerHost, Tag};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -92,21 +92,121 @@ pub fn build(
     Ok(stack)
 }
 
+pub fn plain_color(value: &str) -> String {
+    let mut chars = value.chars().peekable();
+    let mut plain = String::new();
+    while let Some(char) = chars.next() {
+        if matches!(char, '&' | '§')
+            && chars
+                .peek()
+                .is_some_and(|next| "0123456789abcdefklmnor".contains(next.to_ascii_lowercase()))
+        {
+            chars.next();
+        } else {
+            plain.push(char);
+        }
+    }
+    plain
+}
+
+const COLORS: &[&str] = &[
+    "black",
+    "dark_blue",
+    "dark_green",
+    "dark_aqua",
+    "dark_red",
+    "dark_purple",
+    "gold",
+    "gray",
+    "dark_gray",
+    "blue",
+    "green",
+    "aqua",
+    "red",
+    "light_purple",
+    "yellow",
+    "white",
+];
+
 pub fn text(value: &str) -> Tag {
-    let (style, label) = match value.get(..2) {
-        Some("&e") => ("yellow", &value[2..]),
-        Some("&7") => ("gray", &value[2..]),
-        Some("&f") => ("white", &value[2..]),
-        Some("&6") => ("gold", &value[2..]),
-        Some("&a") => ("green", &value[2..]),
-        Some("&c") => ("red", &value[2..]),
-        _ => ("white", value),
-    };
+    let mut children = Vec::new();
+    let mut buffer = String::new();
+    let mut style = TextFormat::default();
+    let mut chars = value.chars().peekable();
+    while let Some(char) = chars.next() {
+        let Some(code) = chars
+            .peek()
+            .copied()
+            .filter(|next| "0123456789abcdefklmnor".contains(next.to_ascii_lowercase()))
+            .filter(|_| matches!(char, '&' | '§'))
+        else {
+            buffer.push(char);
+            continue;
+        };
+        chars.next();
+        if !buffer.is_empty() {
+            children.push(style.component(&std::mem::take(&mut buffer)));
+        }
+        if let Some(color) = code.to_digit(16) {
+            style = TextFormat {
+                color: COLORS[color as usize],
+                ..TextFormat::default()
+            };
+        } else if code.eq_ignore_ascii_case(&'r') {
+            style = TextFormat::default();
+        } else {
+            style.decorations.insert(code.to_ascii_lowercase());
+        }
+    }
+    if !buffer.is_empty() {
+        children.push(style.component(&buffer));
+    }
+    if children.len() == 1 {
+        return children.pop().unwrap();
+    }
     Tag::Compound(Compound::from([
-        ("text".into(), Tag::String(label.into())),
-        ("color".into(), Tag::String(style.into())),
+        ("text".into(), Tag::String("".into())),
         ("italic".into(), Tag::Byte(0)),
+        ("extra".into(), Tag::List(children)),
     ]))
+}
+
+struct TextFormat {
+    color: &'static str,
+    decorations: std::collections::BTreeSet<char>,
+}
+
+impl Default for TextFormat {
+    fn default() -> Self {
+        Self {
+            color: "white",
+            decorations: Default::default(),
+        }
+    }
+}
+
+impl TextFormat {
+    fn component(&self, value: &str) -> Tag {
+        let mut node = Compound::from([
+            ("text".into(), Tag::String(value.into())),
+            ("color".into(), Tag::String(self.color.into())),
+            (
+                "italic".into(),
+                Tag::Byte(i8::from(self.decorations.contains(&'o'))),
+            ),
+        ]);
+        for (code, key) in [
+            ('k', "obfuscated"),
+            ('l', "bold"),
+            ('m', "strikethrough"),
+            ('n', "underlined"),
+        ] {
+            if self.decorations.contains(&code) {
+                node.insert(key.into(), Tag::Byte(1));
+            }
+        }
+        Tag::Compound(node)
+    }
 }
 
 pub struct CorePlacement(pub Arc<Mutex<Service>>);
@@ -128,10 +228,17 @@ impl ItemPart for CorePlacement {
                 return;
             }
             let id = area.id;
-            service.change(|index, _| index.add(area)).map(|_| id)
+            service
+                .change(|index, _| index.add(area))
+                .map(|_| service.occupation(key, id))
         };
         match result {
-            Ok(_) => tell(host, player, "领地已创建，右键核心进行管理"),
+            Ok(owner) => {
+                tell(host, player, "领地已创建，右键核心进行管理");
+                if let Some(owner) = owner {
+                    presentation::occupation(host, player, &owner);
+                }
+            }
             Err(error) => {
                 // The game has placed the block but has not consumed the stack yet.
                 // Returning the item is only safe after the changed block was removed.

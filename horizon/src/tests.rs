@@ -111,7 +111,7 @@ fn corrupt_record_prevents_load_and_preserves_original() {
     let guest = Actor {
         uuid: GUEST,
         name: "Guest".into(),
-        admin: false,
+        operator: false,
     };
     assert!(!service.allowed(&guest, "minecraft:overworld", [0, 64, 0], Flag::Build));
     assert_eq!(
@@ -182,7 +182,7 @@ fn core_creation_enforces_world_height_limits_and_overlap() {
     let owner = Actor {
         uuid: OWNER,
         name: "Owner".into(),
-        admin: false,
+        operator: false,
     };
     assert!(
         service
@@ -219,14 +219,125 @@ fn legacy_import_is_deterministic_and_rejects_partial_import() {
     fs::write(legacy.join("world.yml"), "0,64,0: {owner: Owner, size: {x: 8, y: 8, z: 8}, index: 0}\n5,64,0: {owner: Guest, size: {x: 8, y: 8, z: 8}, index: 0}\n").unwrap();
     let mut service = Service::default();
     service.start(dir.path().into());
-    assert!(service.import_legacy().is_err());
+    assert!(service.import_legacy(&[]).is_err());
     assert!(service.index.areas.is_empty());
     fs::write(
         legacy.join("world.yml"),
         "0,64,0: {owner: Owner, size: {x: 8, y: 8, z: 8}, index: 0}\n",
     )
     .unwrap();
-    assert_eq!(service.import_legacy().unwrap(), 1);
-    assert_eq!(service.import_legacy().unwrap(), 0);
+    assert_eq!(service.import_legacy(&[]).unwrap(), 1);
+    assert_eq!(service.import_legacy(&[]).unwrap(), 0);
     assert_eq!(service.index.areas.len(), 1);
+}
+
+#[test]
+fn permission_nodes_separate_admin_bypass_and_world_placement() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().into());
+    service.index.add(area(1, [0, 64, 0], 8)).unwrap();
+    let guest = Actor {
+        uuid: GUEST,
+        name: "Guest".into(),
+        operator: false,
+    };
+    let settings = &mut service.config.as_mut().unwrap().settings;
+    settings.permission_nodes.insert(
+        GUEST,
+        BTreeMap::from([
+            ("PurtmarsArea.command.admin".into(), true),
+            ("PurtmarsArea.bypass.world_nether".into(), true),
+        ]),
+    );
+    assert!(guest.manages(settings, service.index.areas.get(&OWNER).unwrap()));
+    assert!(!service.allowed(&guest, "minecraft:overworld", [0, 64, 0], Flag::Build));
+    assert!(
+        service
+            .validate_create(&guest, "minecraft:the_nether", [0, 64, 0], "0", 0..256)
+            .is_ok()
+    );
+    service
+        .config
+        .as_mut()
+        .unwrap()
+        .settings
+        .permission_nodes
+        .get_mut(&GUEST)
+        .unwrap()
+        .insert("PurtmarsArea.create".into(), false);
+    assert!(
+        service
+            .validate_create(&guest, "minecraft:the_nether", [0, 64, 0], "0", 0..256)
+            .is_err()
+    );
+}
+
+#[test]
+fn first_join_binds_legacy_owner_and_member_and_keeps_uuid_after_rename() {
+    let dir = tempfile::tempdir().unwrap();
+    let legacy = dir.path().join("legacy-save");
+    fs::create_dir(&legacy).unwrap();
+    fs::write(
+        legacy.join("world.yml"),
+        "0,64,0: {owner: Owner, size: {x: 8, y: 8, z: 8}, members: {Member: {build: true}}}\n",
+    )
+    .unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().into());
+    service.import_legacy(&[(OWNER, "Owner".into())]).unwrap();
+    service.remember(GUEST, "mEmBeR").unwrap();
+    service.remember(GUEST, "RenamedMember").unwrap();
+    service.remember(OWNER, "RenamedOwner").unwrap();
+
+    let mut reopened = Service::default();
+    reopened.start(dir.path().into());
+    let area = reopened.index.at("world", [0, 64, 0]).unwrap();
+    assert_eq!(area.owner, Some(OWNER));
+    assert!(area.is_owner(OWNER, "RenamedOwner"));
+    assert!(!area.is_owner(GUEST, "Owner"));
+    assert!(area.allows(Flag::Build, GUEST, "RenamedMember", false));
+    assert!(!area.members.contains_key("member"));
+    assert_eq!(reopened.known_players["renamedmember"].0, GUEST);
+    assert!(!reopened.known_players.contains_key("member"));
+}
+
+#[test]
+fn usercache_migration_requires_a_matching_playerdata_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let world = dir.path().join("world");
+    let data = world.join("players/data");
+    fs::create_dir_all(&data).unwrap();
+    fs::write(data.join(format!("{OWNER}.dat")), []).unwrap();
+    fs::write(
+        dir.path().join("usercache.json"),
+        format!(
+            r#"[{{"name":"Owner","uuid":"{OWNER}"}},{{"name":"NeverJoined","uuid":"{GUEST}"}}]"#
+        ),
+    )
+    .unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().join("plugin"));
+    service.seed_known(dir.path(), &world).unwrap();
+    assert_eq!(service.known_players["owner"].0, OWNER);
+    assert!(!service.known_players.contains_key("neverjoined"));
+}
+
+#[test]
+fn boundary_particles_keep_paper_edges_range_and_budget() {
+    let v = Volume::sized([0, 64, 0], [8; 3], "0".into()).unwrap();
+    let settings = crate::store::Particle {
+        period: 2,
+        distance: 2.0,
+        range: 50.0,
+        budget: 2,
+    };
+    assert_eq!(
+        crate::presentation::boundary_points([&v].into_iter(), [0.0, 64.0, 0.0], &settings),
+        vec![[-4.0, 60.0, -4.0], [-2.0, 60.0, -4.0]]
+    );
+    assert!(
+        crate::presentation::boundary_points([&v].into_iter(), [100.0, 64.0, 0.0], &settings)
+            .is_empty()
+    );
 }
