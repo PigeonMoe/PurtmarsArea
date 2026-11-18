@@ -168,7 +168,6 @@ impl Hooks for Mod {
     fn player_logged_in(&self, _: &mut dyn ServerHost, event: &mut PlayerLoggedInEvent<'_>) {
         let uuid = Uuid::from_u128(event.player);
         let mut service = self.service();
-        service.connected_players.insert(uuid);
         if let Err(error) = service.remember(uuid, event.name) {
             eprintln!("[PurtmarsArea] 无法绑定旧领地账号：{error}");
         }
@@ -276,6 +275,21 @@ impl Hooks for Mod {
         Flow::Continue
     }
 
+    fn left_click_block(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::LeftClickBlockEvent,
+    ) -> Flow {
+        if event.state.block().id(host) != "minecraft:dragon_egg" {
+            return Flow::Continue;
+        }
+        let Some(player) = host.players().acting_player() else {
+            return Flow::Continue;
+        };
+        let dimension = host.dimension();
+        self.check(host, player, dimension, event.pos, Flag::Build)
+    }
+
     #[listener(priority = 100)]
     fn right_click_block(&self, host: HostSide, event: &mut RightClickBlockEvent<'_>) -> Flow {
         let HostSide::Server(host) = host else {
@@ -316,11 +330,17 @@ impl Hooks for Mod {
             let above_machine = wooden_fence
                 && under_block.as_deref() == Some("minecraft:cauldron")
                 && at(over).as_deref() == Some("minecraft:dispenser");
+            let chamber = (block.as_deref() == Some("minecraft:cauldron"))
+                .then(|| pressure_chamber(pos, &at))
+                .flatten();
             (below_machine
                 && under_block.as_deref() == Some("minecraft:dispenser")
                 && self.check(host, player, dimension, under, Flag::Container) == Flow::Cancel)
                 || (above_machine
                     && self.check(host, player, dimension, over, Flag::Container) == Flow::Cancel)
+                || chamber.is_some_and(|dispenser| {
+                    self.check(host, player, dimension, dispenser, Flag::Container) == Flow::Cancel
+                })
         } else {
             false
         };
@@ -497,10 +517,36 @@ impl Hooks for Mod {
         self.entity_action(host, player, dimension, event.pos, Flag::Build)
     }
 
-    fn vehicle_client_move_pre(
+    fn player_leash_change_pre(
         &self,
         host: &dyn mod_api::Host,
-        event: &mut mod_api::VehicleClientMovePreEvent<'_>,
+        event: &mut mod_api::PlayerLeashChangePreEvent<'_>,
+    ) -> Flow {
+        let Some(actor) = host
+            .player(event.player)
+            .and_then(|player| actor(host, player))
+        else {
+            return Flow::Continue;
+        };
+        let mut service = self.service();
+        if service.store.is_none()
+            || service.allowed(
+                &actor,
+                event.dimension,
+                block_position(event.position),
+                Flag::Leash,
+            )
+        {
+            return Flow::Continue;
+        }
+        service.queue_denial(actor.uuid, Flag::Leash);
+        Flow::Cancel
+    }
+
+    fn ridden_vehicle_move_pre(
+        &self,
+        host: &dyn mod_api::Host,
+        event: &mut mod_api::RiddenVehicleMovePreEvent<'_>,
     ) -> Flow {
         let from = block_position(event.from);
         let to = block_position(event.to);
@@ -508,23 +554,10 @@ impl Hooks for Mod {
         if service.store.is_none() || !service.crosses(event.dimension, from, to) {
             return Flow::Continue;
         }
-        let passengers = host
-            .entity(event.vehicle)
-            .and_then(|entity| entity.indirect_passengers(host))
-            .unwrap_or_default();
-        let rider = service
-            .connected_players
-            .iter()
-            .filter_map(|uuid| host.player(uuid.as_u128()))
-            .filter(|player| {
-                player.uuid() != event.player && passengers.contains(&player.entity())
-            });
         let denied = host
             .player(event.player)
-            .into_iter()
-            .chain(rider)
-            .filter_map(|player| actor(host, player))
-            .find(|actor| !service.allowed(actor, event.dimension, to, Flag::Move));
+            .and_then(|player| actor(host, player))
+            .filter(|actor| !service.allowed(actor, event.dimension, to, Flag::Move));
         if let Some(actor) = denied {
             service.queue_denial(actor.uuid, Flag::Move);
             return Flow::Cancel;
@@ -574,6 +607,14 @@ impl Hooks for Mod {
         }
         let player = event.player.and_then(|id| host.player(id));
         self.entity_action(host, player, dimension, event.pos, Flag::Build)
+    }
+
+    fn mob_block_change_pre(
+        &self,
+        _: &dyn mod_api::Host,
+        event: &mut mod_api::MobBlockChangePreEvent<'_>,
+    ) -> Flow {
+        self.protect_natural(event.dimension, event.pos, Flag::Build)
     }
 
     fn sponge_absorb_pre(
@@ -671,16 +712,36 @@ impl Hooks for Mod {
         }
     }
 
-    fn block_grow_feature(
+    fn block_physics_pre(
         &self,
-        _: &mut dyn mod_api::LevelRandomHost,
-        event: &mut mod_api::BlockGrowFeatureEvent<'_>,
+        _: &dyn LevelHost,
+        event: &mut mod_api::BlockPhysicsPreEvent,
     ) -> Flow {
         flow(
             self.service()
                 .core(dimension_name(&event.dimension), point(event.pos))
                 .is_some(),
         )
+    }
+
+    fn block_growth_candidate_pre(
+        &self,
+        _: &dyn LevelHost,
+        event: &mut mod_api::BlockGrowthCandidatePreEvent<'_>,
+    ) -> Flow {
+        let player = event.player.map(|uuid| Actor {
+            uuid: Uuid::from_u128(uuid),
+            name: event.name.to_owned(),
+            operator: event.permission_level > 0,
+        });
+        flow(self.service().blocks_growth(
+            dimension_name(&event.dimension),
+            point(event.origin),
+            point(event.pos),
+            event.structure,
+            event.fertilized,
+            player.as_ref(),
+        ))
     }
 
     fn entity_travel_to_dimension(
@@ -972,6 +1033,36 @@ impl Hooks for Mod {
         {
             event.invulnerable = self.service().denied_shots.contains(&shot);
         }
+    }
+
+    fn entity_damage_target_pre(
+        &self,
+        _: &mut dyn mod_api::LevelRandomHost,
+        event: &mut mod_api::EntityDamageTargetPreEvent<'_>,
+    ) -> Flow {
+        flow(combat::denies_entity_damage(
+            &mut self.service(),
+            event.dimension,
+            event.position,
+            event.target_kind,
+            event.alive_kind,
+            event.player,
+        ))
+    }
+
+    fn vehicle_damage_pre(
+        &self,
+        _: &dyn mod_api::Host,
+        event: &mut mod_api::VehicleDamagePreEvent<'_>,
+    ) -> Flow {
+        flow(combat::denies_entity_damage(
+            &mut self.service(),
+            event.dimension,
+            event.position,
+            event.kind,
+            false,
+            event.player,
+        ))
     }
 
     fn entity_interact(
@@ -1408,6 +1499,35 @@ fn entity_interaction(kind: &str, held: Option<String>) -> Flag {
     }
 }
 
+fn pressure_chamber(cauldron: Point, at: impl Fn(Point) -> Option<String>) -> Option<Point> {
+    let [x, y, z] = cauldron;
+    let middle = [x, y.saturating_add(1), z];
+    let top = [x, y.saturating_add(2), z];
+    if at(middle).as_deref() != Some("minecraft:glass")
+        || at(top).as_deref() != Some("minecraft:dispenser")
+    {
+        return None;
+    }
+    [0, 2]
+        .into_iter()
+        .any(|axis| {
+            [
+                (cauldron, "minecraft:piston"),
+                (middle, "minecraft:piston"),
+                (top, "minecraft:smooth_stone_slab"),
+            ]
+            .into_iter()
+            .all(|(pos, material)| {
+                [-1, 1].into_iter().all(|side| {
+                    let mut side_pos = pos;
+                    side_pos[axis] = side_pos[axis].saturating_add(side);
+                    at(side_pos).as_deref() == Some(material)
+                })
+            })
+        })
+        .then_some(top)
+}
+
 fn hostile(kind: &str) -> bool {
     // Paper's Monster interface is narrower than its Enemy interface.
     matches!(
@@ -1431,7 +1551,6 @@ fn hostile(kind: &str) -> bool {
             | "piglin_brute"
             | "pillager"
             | "ravager"
-            | "shulker"
             | "silverfish"
             | "skeleton"
             | "spider"

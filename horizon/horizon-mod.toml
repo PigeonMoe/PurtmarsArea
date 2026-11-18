@@ -1,6 +1,6 @@
 id = "purtmarsarea"
 name = "PurtmarsArea"
-version = "2.1.1-horizon.5"
+version = "2.1.1-horizon.6"
 description = "普特莫斯领地保护"
 authors = ["PigeonMoe"]
 api = "0.2"
@@ -9,5 +9,5 @@ capabilities = ["registries"]
 
 [native]
 game = "26.3"
-horizon = "d2679a263841152d461e921fba39007e9ba4d3a1"
+horizon = "96d757fd4c6226a872c33071c5c360a9e68d7c36"
 mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"

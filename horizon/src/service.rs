@@ -3,7 +3,7 @@ use crate::{
     store::{Config, KnownPlayers, Settings, Store},
 };
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -42,7 +42,6 @@ pub struct Service {
     pub member_inputs: HashMap<Uuid, crate::menu::MemberInput>,
     pub ticks: u64,
     pub transit_entities: HashMap<u128, u64>,
-    pub connected_players: BTreeSet<Uuid>,
     pub pending_notices: Vec<(Uuid, String)>,
     pub denied_shots: HashSet<crate::combat::Shot>,
     notices: HashMap<Uuid, Instant>,
@@ -194,6 +193,40 @@ impl Service {
                     self.at(origin_dimension, origin).map(|area| area.id)
                         != claim.map(|area| area.id)
                 }) && !self.natural(dimension, target, Flag::Falling)))
+    }
+
+    pub fn blocks_growth(
+        &mut self,
+        dimension: &str,
+        origin: Point,
+        target: Point,
+        structure: bool,
+        fertilized: bool,
+        player: Option<&Actor>,
+    ) -> bool {
+        if self.store.is_none() {
+            return false;
+        }
+        if self.core(dimension, target).is_some()
+            || (structure
+                && self.crosses(dimension, origin, target)
+                && !self.natural(dimension, target, Flag::Build))
+        {
+            return true;
+        }
+        if !fertilized {
+            return false;
+        }
+        match player {
+            Some(actor) => {
+                let denied = !self.allowed(actor, dimension, target, Flag::Build);
+                if denied {
+                    self.queue_denial(actor.uuid, Flag::Build);
+                }
+                denied
+            }
+            None => !self.natural(dimension, target, Flag::Build),
+        }
     }
 
     pub fn denial(&mut self, actor: Uuid, flag: Flag) -> Option<String> {
@@ -398,7 +431,6 @@ impl Service {
     }
 
     pub fn quit(&mut self, uuid: Uuid) {
-        self.connected_players.remove(&uuid);
         self.notices.remove(&uuid);
         self.occupations.remove(&uuid);
         self.clicked_cores.remove(&uuid);

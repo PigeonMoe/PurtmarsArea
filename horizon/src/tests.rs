@@ -154,6 +154,72 @@ fn projectile_veto_matches_only_the_original_damage_attempt() {
 }
 
 #[test]
+fn growth_filters_the_structure_boundary_and_then_the_fertilizer_actor() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().into());
+    service.index.add(area(1, [0, 64, 0], 8)).unwrap();
+    let world = "minecraft:overworld";
+    let outside = [4, 64, 0];
+    let inside = [3, 64, 0];
+    let owner = Actor {
+        uuid: OWNER,
+        name: "Owner".into(),
+        operator: false,
+    };
+    let guest = Actor {
+        uuid: GUEST,
+        name: "Guest".into(),
+        operator: false,
+    };
+    assert!(service.blocks_growth(world, outside, inside, true, false, None));
+    assert!(!service.blocks_growth(world, inside, [2, 64, 0], true, false, None));
+    assert!(service.blocks_growth(world, inside, [0, 64, 0], true, false, None));
+    assert!(service.blocks_growth(world, outside, inside, true, true, Some(&owner)));
+    assert!(!service.blocks_growth(world, outside, inside, false, true, Some(&owner)));
+    assert!(service.blocks_growth(world, inside, [2, 64, 0], true, true, Some(&guest)));
+    assert!(service.blocks_growth(world, inside, [2, 64, 0], false, true, None));
+    assert!(!service.blocks_growth(world, inside, outside, true, true, Some(&guest)));
+    assert_eq!(service.denials.get(&Flag::Build), Some(&1));
+}
+
+#[test]
+fn pressure_chamber_guard_requires_every_block_in_one_axis() {
+    let center = [4, 65, -3];
+    for axis in [0, 2] {
+        let mut blocks = BTreeMap::from([
+            ([4, 66, -3], "minecraft:glass"),
+            ([4, 67, -3], "minecraft:dispenser"),
+        ]);
+        for dy in 0..3 {
+            for side in [-1, 1] {
+                let mut pos = [4, 65 + dy, -3];
+                pos[axis] += side;
+                blocks.insert(
+                    pos,
+                    if dy == 2 {
+                        "minecraft:smooth_stone_slab"
+                    } else {
+                        "minecraft:piston"
+                    },
+                );
+            }
+        }
+        assert_eq!(
+            crate::pressure_chamber(center, |pos| blocks.get(&pos).map(|s| (*s).to_owned())),
+            Some([4, 67, -3])
+        );
+        let mut broken = [4, 66, -3];
+        broken[axis] -= 1;
+        blocks.remove(&broken);
+        assert_eq!(
+            crate::pressure_chamber(center, |pos| blocks.get(&pos).map(|s| (*s).to_owned())),
+            None
+        );
+    }
+}
+
+#[test]
 fn pvp_uses_the_shooters_current_level_and_the_victims_block() {
     let dir = tempfile::tempdir().unwrap();
     let mut service = Service::default();
@@ -182,6 +248,108 @@ fn pvp_uses_the_shooters_current_level_and_the_victims_block() {
         Some((nether, inside)),
         overworld,
         [5.0, 64.0, 0.0]
+    ));
+}
+
+#[test]
+fn damage_uses_player_responsibility_or_natural_rules_by_victim_kind() {
+    use crate::combat::denies_entity_damage as denied;
+    assert_eq!(
+        crate::combat::target_flag("minecraft:shulker", true),
+        Flag::DamageAnimals
+    );
+    assert_eq!(
+        crate::combat::target_flag("minecraft:ghast", true),
+        Flag::DamageAnimals
+    );
+    assert_eq!(
+        crate::combat::target_flag("minecraft:piglin", true),
+        Flag::DamageMonster
+    );
+    use mod_api::entity::health::DamagePlayer;
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().into());
+    let mut claim = area(1, [0, 64, 0], 8);
+    claim.flags.insert(Flag::Pvp, false);
+    service.index.add(claim).unwrap();
+    let dim = "minecraft:overworld";
+    let inside = [0.0, 64.0, 0.0];
+    let guest = DamagePlayer {
+        uuid: GUEST.as_u128(),
+        name: "Guest".into(),
+        permission: 0,
+        dimension: dim.into(),
+        position: [9.0, 64.0, 0.0],
+    };
+    let owner = DamagePlayer {
+        uuid: OWNER.as_u128(),
+        name: "Renamed".into(),
+        ..guest.clone()
+    };
+    assert!(!denied(
+        &mut service,
+        dim,
+        inside,
+        "minecraft:player",
+        true,
+        None
+    ));
+    assert!(denied(
+        &mut service,
+        dim,
+        inside,
+        "minecraft:player",
+        true,
+        Some(&owner)
+    ));
+    assert!(!denied(
+        &mut service,
+        dim,
+        inside,
+        "minecraft:pig",
+        true,
+        None
+    ));
+    assert!(denied(
+        &mut service,
+        dim,
+        inside,
+        "minecraft:pig",
+        true,
+        Some(&guest)
+    ));
+    assert!(!denied(
+        &mut service,
+        dim,
+        inside,
+        "minecraft:pig",
+        true,
+        Some(&owner)
+    ));
+    assert!(denied(
+        &mut service,
+        dim,
+        inside,
+        "minecraft:oak_boat",
+        false,
+        None
+    ));
+    assert!(denied(
+        &mut service,
+        dim,
+        inside,
+        "minecraft:oak_boat",
+        false,
+        Some(&guest)
+    ));
+    assert!(!denied(
+        &mut service,
+        dim,
+        inside,
+        "minecraft:oak_boat",
+        false,
+        Some(&owner)
     ));
 }
 

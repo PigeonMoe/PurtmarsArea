@@ -1,6 +1,6 @@
 [package]
 name = "purtmarsarea"
-version = "2.1.1-horizon.5"
+version = "2.1.1-horizon.6"
 edition = "2024"
 publish = false
 

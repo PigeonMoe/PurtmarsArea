@@ -1,5 +1,6 @@
 use crate::{Point, block_position, hostile, model::Flag, service::Service};
-use mod_api::entity::health::HurtSource;
+use mod_api::entity::health::{DamagePlayer, HurtSource};
+use uuid::Uuid;
 
 // Impact dispatch and damage dispatch use these same server-wide IDs. Keep the
 // types in the key as well so a later damage attempt cannot inherit the veto.
@@ -58,4 +59,42 @@ pub fn denies_pvp(
     service.store.is_some()
         && (origin.is_some_and(|(dim, pos)| !service.natural(dim, pos, Flag::Pvp))
             || !service.natural(dimension, block_position(target), Flag::Pvp))
+}
+
+pub fn denies_entity_damage(
+    service: &mut Service,
+    dimension: &str,
+    position: [f64; 3],
+    kind: &str,
+    living: bool,
+    player: Option<&DamagePlayer>,
+) -> bool {
+    if service.store.is_none() {
+        return false;
+    }
+    if kind == "minecraft:player" {
+        return player.is_some_and(|player| {
+            denies_pvp(
+                service,
+                Some((&player.dimension, block_position(player.position))),
+                dimension,
+                position,
+            )
+        });
+    }
+    let flag = target_flag(kind, living);
+    let pos = block_position(position);
+    let Some(player) = player else {
+        return !living && !service.natural(dimension, pos, flag);
+    };
+    let actor = crate::service::Actor {
+        uuid: Uuid::from_u128(player.uuid),
+        name: player.name.clone(),
+        operator: player.permission > 0,
+    };
+    let denied = !service.allowed(&actor, dimension, pos, flag);
+    if denied {
+        service.queue_denial(actor.uuid, flag);
+    }
+    denied
 }
