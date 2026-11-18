@@ -396,6 +396,61 @@ fn paper_block_clicks_use_the_classification_before_inventory_opening() {
 }
 
 #[test]
+fn workbench_protects_the_dispenser_selected_by_the_actual_horizontal_structure() {
+    use crate::slimefun_workbench_dispenser;
+    const WORKBENCH: [i32; 3] = [3, 64, 0];
+    const BELOW: [i32; 3] = [3, 63, 0];
+    let east = [4, 64, 0];
+    let south = [3, 64, 1];
+    let west = [2, 64, 0];
+    let north = [3, 64, -1];
+    let mut blocks = BTreeMap::from([
+        (east, "minecraft:dispenser"),
+        (south, "minecraft:dispenser"),
+        (west, "minecraft:bookshelf"),
+        (north, "minecraft:bookshelf"),
+        (BELOW, "minecraft:dispenser"),
+    ]);
+    let selected = |blocks: &BTreeMap<_, &str>| {
+        slimefun_workbench_dispenser(WORKBENCH, |pos| {
+            blocks.get(&pos).copied().map(str::to_owned)
+        })
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().into());
+    service.index.add(area(1, [8, 64, 0], 8)).unwrap();
+    let guest = Actor {
+        uuid: GUEST,
+        name: "Guest".into(),
+        operator: false,
+    };
+    let dim = "minecraft:overworld";
+    assert_eq!(selected(&blocks), Some(east));
+    assert!(!service.allowed(&guest, dim, selected(&blocks).unwrap(), Flag::Container));
+    assert!(service.allowed(&guest, dim, BELOW, Flag::Container));
+
+    blocks.remove(&west);
+    assert_eq!(selected(&blocks), Some(east));
+    blocks.remove(&east);
+    assert_eq!(selected(&blocks), Some(south));
+    blocks.insert(north, "minecraft:chiseled_bookshelf");
+    assert_eq!(selected(&blocks), Some(BELOW));
+    blocks.insert(east, "minecraft:bookshelf");
+    blocks.insert(west, "minecraft:dispenser");
+    blocks.remove(&south);
+    assert_eq!(selected(&blocks), Some(west));
+    blocks.insert(south, "minecraft:bookshelf");
+    blocks.insert(north, "minecraft:dispenser");
+    blocks.remove(&west);
+    assert_eq!(selected(&blocks), Some(north));
+    blocks.remove(&north);
+    blocks.remove(&BELOW);
+    assert_eq!(selected(&blocks), None);
+}
+
+#[test]
 fn pressure_chamber_guard_requires_every_block_in_one_axis() {
     let center = [4, 65, -3];
     for axis in [0, 2] {

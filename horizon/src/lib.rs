@@ -325,15 +325,15 @@ impl Hooks for Mod {
                     .and_then(|level| level.block(host, point))
                     .map(|key| key.id(host))
             };
-            let below_machine = wooden_fence
-                || matches!(
-                    block.as_deref(),
-                    Some("minecraft:crafting_table" | "minecraft:nether_brick_fence")
-                );
+            let below_machine =
+                wooden_fence || block.as_deref() == Some("minecraft:nether_brick_fence");
             let under_block = at(under);
             let above_machine = wooden_fence
                 && under_block.as_deref() == Some("minecraft:cauldron")
                 && at(over).as_deref() == Some("minecraft:dispenser");
+            let workbench = (block.as_deref() == Some("minecraft:crafting_table"))
+                .then(|| slimefun_workbench_dispenser(pos, &at))
+                .flatten();
             let chamber = (block.as_deref() == Some("minecraft:cauldron"))
                 .then(|| pressure_chamber(pos, &at))
                 .flatten();
@@ -342,7 +342,7 @@ impl Hooks for Mod {
                 && self.check(host, player, dimension, under, Flag::Container) == Flow::Cancel)
                 || (above_machine
                     && self.check(host, player, dimension, over, Flag::Container) == Flow::Cancel)
-                || chamber.is_some_and(|dispenser| {
+                || workbench.or(chamber).is_some_and(|dispenser| {
                     self.check(host, player, dimension, dispenser, Flag::Container) == Flow::Cancel
                 })
         } else {
@@ -1546,6 +1546,29 @@ fn entity_interaction(kind: &str, held: Option<String>) -> Flag {
         _ if held.as_deref() == Some("minecraft:lead") => Flag::Leash,
         _ => Flag::Build,
     }
+}
+
+fn slimefun_workbench_dispenser(
+    table: Point,
+    at: impl Fn(Point) -> Option<String>,
+) -> Option<Point> {
+    let [x, y, z] = table;
+    let mut first_dispenser = None;
+    // Slimefun recognizes any rotated Magic Workbench and looks up its
+    // inventory by the first horizontal dispenser in this order.
+    for (dx, dz) in [(1, 0), (0, 1), (-1, 0), (0, -1)] {
+        let dispenser = [x.saturating_add(dx), y, z.saturating_add(dz)];
+        if at(dispenser).as_deref() != Some("minecraft:dispenser") {
+            continue;
+        }
+        let inventory = *first_dispenser.get_or_insert(dispenser);
+        let shelf = [x.saturating_sub(dx), y, z.saturating_sub(dz)];
+        if at(shelf).as_deref() == Some("minecraft:bookshelf") {
+            return Some(inventory);
+        }
+    }
+    let under = [x, y.saturating_sub(1), z];
+    (at(under).as_deref() == Some("minecraft:dispenser")).then_some(under)
 }
 
 fn pressure_chamber(cauldron: Point, at: impl Fn(Point) -> Option<String>) -> Option<Point> {
