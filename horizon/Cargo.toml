@@ -9,5 +9,5 @@ horizon-mod-api = { path = ".horizon/sdk/api/crates/horizon-mod-api" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_yaml_ng = "=0.10.0"
 tempfile = "=3.27.0"
-uuid = { version = "=1.28.0", features = ["serde", "v4"] }
+uuid = { version = "=1.27.0", features = ["serde", "v4"] }
 md5 = "=0.8.1"
