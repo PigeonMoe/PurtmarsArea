@@ -297,9 +297,10 @@ fn physical_redstone_uses_player_interaction_or_natural_build_permission() {
     };
     let dim = "minecraft:overworld";
     let plate = [1, 64, 0];
-    assert!(service.blocks_physical_redstone(dim, plate, Some(&guest)));
-    assert!(service.blocks_physical_redstone(dim, plate, None));
-    assert!(!service.blocks_physical_redstone(dim, [4, 64, 0], Some(&guest)));
+    let redstone = Flag::Redstone;
+    assert!(service.blocks_physical_trigger(dim, plate, Some(&guest), redstone));
+    assert!(service.blocks_physical_trigger(dim, plate, None, redstone));
+    assert!(!service.blocks_physical_trigger(dim, [4, 64, 0], Some(&guest), redstone));
     service
         .index
         .areas
@@ -307,8 +308,8 @@ fn physical_redstone_uses_player_interaction_or_natural_build_permission() {
         .unwrap()
         .flags
         .insert(Flag::Redstone, true);
-    assert!(!service.blocks_physical_redstone(dim, plate, Some(&guest)));
-    assert!(service.blocks_physical_redstone(dim, plate, None));
+    assert!(!service.blocks_physical_trigger(dim, plate, Some(&guest), redstone));
+    assert!(service.blocks_physical_trigger(dim, plate, None, redstone));
     service
         .index
         .areas
@@ -316,7 +317,35 @@ fn physical_redstone_uses_player_interaction_or_natural_build_permission() {
         .unwrap()
         .flags
         .insert(Flag::Build, true);
-    assert!(!service.blocks_physical_redstone(dim, plate, None));
+    assert!(!service.blocks_physical_trigger(dim, plate, None, redstone));
+}
+
+#[test]
+fn standing_on_dripleaf_requires_build_and_preserves_a_core_even_for_its_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().into());
+    let mut claim = area(1, [0, 64, 0], 8);
+    claim.flags.insert(Flag::Redstone, true);
+    service.index.add(claim).unwrap();
+    let owner = Actor {
+        uuid: OWNER,
+        name: "Owner".into(),
+        operator: false,
+    };
+    let guest = Actor {
+        uuid: GUEST,
+        name: "Guest".into(),
+        operator: false,
+    };
+    let dim = "minecraft:overworld";
+    let leaf = [1, 64, 0];
+    let build = Flag::Build;
+    assert!(!service.blocks_physical_trigger(dim, leaf, Some(&owner), build));
+    assert!(service.blocks_physical_trigger(dim, leaf, Some(&guest), build));
+    assert!(service.blocks_physical_trigger(dim, leaf, None, build));
+    assert!(service.blocks_physical_trigger(dim, [0, 64, 0], Some(&owner), build));
+    assert!(!service.blocks_physical_trigger(dim, [4, 64, 0], None, build));
 }
 
 #[test]

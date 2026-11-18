@@ -659,18 +659,29 @@ impl Hooks for Mod {
 
     fn block_trigger_entity_pre(
         &self,
-        _: &dyn LevelHost,
+        host: &dyn LevelHost,
         event: &mut mod_api::BlockTriggerEntityPreEvent<'_>,
     ) -> Flow {
+        let pos = point(event.pos);
+        let flag = if host
+            .block_state(pos)
+            .and_then(|state| host.state_block(state))
+            .is_some_and(|block| block == "minecraft:big_dripleaf")
+        {
+            Flag::Build
+        } else {
+            Flag::Redstone
+        };
         let player = event.player.map(|uuid| Actor {
             uuid: Uuid::from_u128(uuid),
             name: event.name.to_owned(),
             operator: event.permission_level > 0,
         });
-        flow(self.service().blocks_physical_redstone(
+        flow(self.service().blocks_physical_trigger(
             dimension_name(&event.dimension),
-            point(event.pos),
+            pos,
             player.as_ref(),
+            flag,
         ))
     }
 
