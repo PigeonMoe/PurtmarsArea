@@ -1189,8 +1189,10 @@ impl Hooks for Mod {
 
     fn block_spread(&self, host: &dyn LevelHost, event: &mut BlockSpreadEvent<'_>) -> Flow {
         let dimension = dimension_name(&event.dimension);
+        let destination = point(event.to);
         let flag = match event.kind {
-            "fire" => Flag::Fire,
+            "fire" => return self.protect_natural(dimension, destination, Flag::Fire),
+            "growth" => return self.protect_natural(dimension, destination, Flag::Build),
             "fluid" => {
                 let lava = host
                     .block_state(point(event.from))
@@ -1203,10 +1205,9 @@ impl Hooks for Mod {
         let service = self.service();
         flow(
             service.store.is_some()
-                && (service.core(dimension, point(event.to)).is_some()
-                    || !service.natural(dimension, point(event.to), flag)
-                    || (event.kind == "fluid"
-                        && !service.natural(dimension, point(event.from), flag))),
+                && (service.core(dimension, destination).is_some()
+                    || !service.natural(dimension, destination, flag)
+                    || !service.natural(dimension, point(event.from), flag)),
         )
     }
 

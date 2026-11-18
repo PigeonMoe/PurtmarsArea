@@ -320,6 +320,33 @@ fn physical_redstone_uses_player_interaction_or_natural_build_permission() {
 }
 
 #[test]
+fn growth_spread_uses_natural_build_at_each_target_and_keeps_the_core_protected() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = crate::Mod::default();
+    let mut service = plugin.service();
+    service.start(dir.path().into());
+    let mut claim = area(1, [0, 64, 0], 8);
+    claim.flags.insert(Flag::Fire, true);
+    service.index.add(claim).unwrap();
+    drop(service);
+
+    let dimension = "minecraft:overworld";
+    let growth = |target| plugin.protect_natural(dimension, target, Flag::Build);
+    assert_eq!(growth([1, 64, 0]), mod_api::Flow::Cancel);
+    assert_eq!(growth([4, 64, 0]), mod_api::Flow::Continue);
+    plugin
+        .service()
+        .index
+        .areas
+        .get_mut(&OWNER)
+        .unwrap()
+        .flags
+        .insert(Flag::Build, true);
+    assert_eq!(growth([1, 64, 0]), mod_api::Flow::Continue);
+    assert_eq!(growth([0, 64, 0]), mod_api::Flow::Cancel);
+}
+
+#[test]
 fn paper_block_clicks_use_the_classification_before_inventory_opening() {
     use crate::interaction_flag;
     assert_eq!(
