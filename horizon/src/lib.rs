@@ -418,7 +418,7 @@ impl Hooks for Mod {
             "minecraft:merchant" => Flag::Trade,
             _ => Flag::Container,
         };
-        let paired = if flag == Flag::Container {
+        let paired = if flag == Flag::Container && event.kind != "minecraft:horse_inventory" {
             chest_partner(host, dimension, pos)
         } else {
             None
