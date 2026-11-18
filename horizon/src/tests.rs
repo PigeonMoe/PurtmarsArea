@@ -184,6 +184,105 @@ fn growth_filters_the_structure_boundary_and_then_the_fertilizer_actor() {
 }
 
 #[test]
+fn paper_vehicle_and_inventory_holders_use_container_permission() {
+    for kind in [
+        "minecraft:oak_boat",
+        "minecraft:bamboo_chest_raft",
+        "minecraft:spawner_minecart",
+        "minecraft:pig",
+        "minecraft:strider",
+        "minecraft:donkey",
+        "minecraft:camel_husk",
+        "minecraft:trader_llama",
+        "minecraft:nautilus",
+        "minecraft:zombie_nautilus",
+        "minecraft:happy_ghast",
+    ] {
+        assert!(crate::paper_vehicle(kind), "{kind}");
+        assert_eq!(
+            crate::entity_interaction(kind, Some("minecraft:lead".into())),
+            Flag::Container,
+            "{kind}"
+        );
+    }
+    for kind in [
+        "minecraft:allay",
+        "minecraft:piglin",
+        "minecraft:pillager",
+        "minecraft:player",
+    ] {
+        assert!(!crate::paper_vehicle(kind), "{kind}");
+        assert_eq!(crate::entity_interaction(kind, None), Flag::Container);
+    }
+    assert_eq!(
+        crate::entity_interaction("minecraft:villager", None),
+        Flag::Trade
+    );
+    assert_eq!(
+        crate::entity_interaction("minecraft:cow", Some("minecraft:lead".into())),
+        Flag::Leash
+    );
+    assert_eq!(
+        crate::entity_interaction("minecraft:cow", None),
+        Flag::Build
+    );
+}
+
+#[test]
+fn a_vehicle_boundary_checks_each_players_access_to_the_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().into());
+    let mut first = area(1, [0, 64, 0], 8);
+    first.flags.insert(Flag::Move, false);
+    service.index.add(first).unwrap();
+    service.index.add(area(2, [8, 64, 0], 8)).unwrap();
+    let dim = "minecraft:overworld";
+    let guest = || {
+        Some(Actor {
+            uuid: GUEST,
+            name: "Guest".into(),
+            operator: false,
+        })
+    };
+    let owner = || {
+        Some(Actor {
+            uuid: OWNER,
+            name: "Owner".into(),
+            operator: false,
+        })
+    };
+    assert!(!service.blocks_ridden_vehicle(dim, [-5, 64, 0], [-4, 64, 0], owner));
+    assert!(service.blocks_ridden_vehicle(dim, [-5, 64, 0], [-4, 64, 0], guest));
+    assert!(!service.blocks_ridden_vehicle(dim, [2, 64, 0], [3, 64, 0], guest));
+    assert!(!service.blocks_ridden_vehicle(dim, [3, 64, 0], [4, 64, 0], guest));
+    assert!(service.blocks_ridden_vehicle(dim, [4, 64, 0], [3, 64, 0], guest));
+    assert!(!service.blocks_ridden_vehicle(dim, [-4, 64, 0], [-5, 64, 0], guest));
+    assert_eq!(service.denials.get(&Flag::Move), Some(&2));
+}
+
+#[test]
+fn the_piston_checks_fragile_blocks_and_papers_retract_directions() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().into());
+    service.index.add(area(1, [0, 64, 0], 8)).unwrap();
+    let dim = "minecraft:overworld";
+    let east = [1, 0, 0];
+    let west = [-1, 0, 0];
+    let base = [1, 63, 0];
+    assert!(!service.blocks_piston(dim, base, east, [[2, 63, 0]].into_iter()));
+    assert!(service.blocks_piston(dim, base, east, [[3, 63, 0]].into_iter()));
+    assert!(service.blocks_piston(dim, base, east, [[0, 64, 0]].into_iter()));
+    assert_eq!(crate::piston_protection_direction(east, true, true), east);
+    assert_eq!(crate::piston_protection_direction(west, false, true), east);
+    assert_eq!(crate::piston_protection_direction(west, false, false), west);
+    // The empty retract faces east, and the Paper listener checks west of the base.
+    assert!(!service.blocks_piston(dim, [3, 63, 0], west, std::iter::empty()));
+    assert!(service.blocks_piston(dim, [-4, 63, 0], west, std::iter::empty()));
+}
+
+#[test]
 fn pressure_chamber_guard_requires_every_block_in_one_axis() {
     let center = [4, 65, -3];
     for axis in [0, 2] {

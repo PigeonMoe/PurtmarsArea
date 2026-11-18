@@ -550,19 +550,13 @@ impl Hooks for Mod {
     ) -> Flow {
         let from = block_position(event.from);
         let to = block_position(event.to);
-        let mut service = self.service();
-        if service.store.is_none() || !service.crosses(event.dimension, from, to) {
-            return Flow::Continue;
-        }
-        let denied = host
-            .player(event.player)
-            .and_then(|player| actor(host, player))
-            .filter(|actor| !service.allowed(actor, event.dimension, to, Flag::Move));
-        if let Some(actor) = denied {
-            service.queue_denial(actor.uuid, Flag::Move);
-            return Flow::Cancel;
-        }
-        Flow::Continue
+        flow(
+            self.service()
+                .blocks_ridden_vehicle(event.dimension, from, to, || {
+                    host.player(event.player)
+                        .and_then(|player| actor(host, player))
+                }),
+        )
     }
 
     fn entity_mount(
@@ -570,7 +564,7 @@ impl Hooks for Mod {
         host: &mut dyn ServerHost,
         event: &mut mod_api::EntityMountEvent<'_>,
     ) -> Flow {
-        if !event.mounting {
+        if !event.mounting || !paper_vehicle(event.vehicle_kind) {
             return Flow::Continue;
         }
         let Some(player) = player_entity(host, event.entity) else {
@@ -1196,31 +1190,22 @@ impl Hooks for Mod {
     }
 
     fn piston_pre(&self, _: &dyn LevelHost, event: &mut PistonPreEvent<'_>) -> Flow {
-        let service = self.service();
-        if service.store.is_none() {
-            return Flow::Continue;
-        }
-        let dimension = dimension_name(&event.dimension);
-        let origin = point(event.piston);
-        let within = |pos| {
-            !service.crosses(dimension, origin, pos)
-                && service.natural(dimension, pos, Flag::RedstonePerform)
-                && service.core(dimension, pos).is_none()
-        };
-        let step = |pos: Point| std::array::from_fn(|i| pos[i].saturating_add(event.direction[i]));
-        let head = if event.extending {
-            step(origin)
-        } else {
-            std::array::from_fn(|i| origin[i].saturating_sub(event.direction[i]))
-        };
         flow(
-            !within(origin)
-                || !within(head)
-                || event
+            self.service().blocks_piston(
+                dimension_name(&event.dimension),
+                point(event.piston),
+                piston_protection_direction(
+                    event.direction,
+                    event.extending,
+                    !event.push.is_empty() || !event.destroy.is_empty(),
+                ),
+                event
                     .push
                     .iter()
-                    .any(|&pos| !within(point(pos)) || !within(step(point(pos))))
-                || event.destroy.iter().any(|&pos| !within(point(pos))),
+                    .chain(event.destroy.iter())
+                    .copied()
+                    .map(point),
+            ),
         )
     }
 }
@@ -1474,26 +1459,54 @@ fn point(pos: mod_api::BlockPos) -> Point {
     [pos.x, pos.y, pos.z]
 }
 
-fn entity_inventory(kind: &str) -> bool {
+fn piston_protection_direction(direction: Point, extending: bool, moves_blocks: bool) -> Point {
+    // Paper's empty retract event supplies the piston's facing. A resolved
+    // sticky pull supplies the movement direction. The Paper plugin inverts
+    // both when checking the neighboring positions.
+    if !extending && moves_blocks {
+        return direction.map(i32::saturating_neg);
+    }
+    direction
+}
+
+fn paper_vehicle(kind: &str) -> bool {
+    let Some(name) = kind.strip_prefix("minecraft:") else {
+        return false;
+    };
     matches!(
-        kind,
-        "minecraft:armor_stand"
-            | "minecraft:item_frame"
-            | "minecraft:glow_item_frame"
-            | "minecraft:minecart"
-            | "minecraft:chest_minecart"
-            | "minecraft:hopper_minecart"
-            | "minecraft:furnace_minecart"
-            | "minecraft:tnt_minecart"
-            | "minecraft:command_block_minecart"
-    ) || kind.ends_with("_boat")
-        || kind.ends_with("_raft")
+        name,
+        "boat"
+            | "minecart"
+            | "pig"
+            | "strider"
+            | "horse"
+            | "skeleton_horse"
+            | "zombie_horse"
+            | "donkey"
+            | "mule"
+            | "camel"
+            | "camel_husk"
+            | "llama"
+            | "trader_llama"
+            | "nautilus"
+            | "zombie_nautilus"
+            | "happy_ghast"
+    ) || name.ends_with("_minecart")
+        || name.ends_with("_boat")
+        || name.ends_with("_raft")
 }
 
 fn entity_interaction(kind: &str, held: Option<String>) -> Flag {
     match kind {
         "minecraft:villager" | "minecraft:wandering_trader" => Flag::Trade,
-        _ if entity_inventory(kind) => Flag::Container,
+        "minecraft:armor_stand"
+        | "minecraft:item_frame"
+        | "minecraft:glow_item_frame"
+        | "minecraft:allay"
+        | "minecraft:piglin"
+        | "minecraft:pillager"
+        | "minecraft:player" => Flag::Container,
+        _ if paper_vehicle(kind) => Flag::Container,
         _ if held.as_deref() == Some("minecraft:lead") => Flag::Leash,
         _ => Flag::Build,
     }

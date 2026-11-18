@@ -180,6 +180,46 @@ impl Service {
         self.at(dimension, from).map(|area| area.id) != self.at(dimension, to).map(|area| area.id)
     }
 
+    pub fn blocks_ridden_vehicle(
+        &mut self,
+        dimension: &str,
+        from: Point,
+        to: Point,
+        player: impl FnOnce() -> Option<Actor>,
+    ) -> bool {
+        if self.store.is_none() || !self.crosses(dimension, from, to) {
+            return false;
+        }
+        if let Some(actor) =
+            player().filter(|actor| !self.allowed(actor, dimension, to, Flag::Move))
+        {
+            self.queue_denial(actor.uuid, Flag::Move);
+            return true;
+        }
+        false
+    }
+
+    pub fn blocks_piston(
+        &self,
+        dimension: &str,
+        origin: Point,
+        direction: Point,
+        mut affected: impl Iterator<Item = Point>,
+    ) -> bool {
+        if self.store.is_none() {
+            return false;
+        }
+        let within = |pos| {
+            !self.crosses(dimension, origin, pos)
+                && self.natural(dimension, pos, Flag::RedstonePerform)
+                && self.core(dimension, pos).is_none()
+        };
+        let step = |pos: Point| std::array::from_fn(|i| pos[i].saturating_add(direction[i]));
+        !within(origin)
+            || !within(step(origin))
+            || affected.any(|pos| !within(pos) || !within(step(pos)))
+    }
+
     pub fn blocks_falling(
         &self,
         dimension: &str,
