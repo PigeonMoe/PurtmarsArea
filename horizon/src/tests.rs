@@ -373,6 +373,29 @@ fn physical_redstone_uses_player_interaction_or_natural_build_permission() {
 }
 
 #[test]
+fn turtle_eggs_use_natural_build_only_for_non_players() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().into());
+    let core = [0, 64, 0];
+    let mut claim = area(1, core, 8);
+    claim.flags.insert(Flag::Build, false);
+    claim.flags.insert(Flag::Redstone, true);
+    service.index.add(claim).unwrap();
+    let dim = "minecraft:overworld";
+
+    assert!(service.blocks_egg_trample(dim, core, false));
+    assert!(service.blocks_egg_trample(dim, [1, 64, 0], false));
+    assert!(!service.blocks_egg_trample(dim, core, true));
+    assert!(!service.blocks_egg_trample(dim, [20, 64, 0], false));
+
+    let claim = service.index.areas.get_mut(&OWNER).unwrap();
+    claim.flags.insert(Flag::Build, true);
+    claim.flags.insert(Flag::Redstone, false);
+    assert!(!service.blocks_egg_trample(dim, core, false));
+}
+
+#[test]
 fn standing_on_dripleaf_requires_build_and_preserves_a_core_even_for_its_owner() {
     let dir = tempfile::tempdir().unwrap();
     let mut service = Service::default();

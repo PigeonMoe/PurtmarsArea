@@ -691,11 +691,17 @@ impl Hooks for Mod {
         event: &mut mod_api::BlockTriggerEntityPreEvent<'_>,
     ) -> Flow {
         let pos = point(event.pos);
-        let flag = if host
+        let dimension = dimension_name(&event.dimension);
+        let block = host
             .block_state(pos)
-            .and_then(|state| host.state_block(state))
-            .is_some_and(|block| block == "minecraft:big_dripleaf")
-        {
+            .and_then(|state| host.state_block(state));
+        if block == Some("minecraft:turtle_egg") {
+            return flow(
+                self.service()
+                    .blocks_egg_trample(dimension, pos, event.player.is_some()),
+            );
+        }
+        let flag = if block == Some("minecraft:big_dripleaf") {
             Flag::Build
         } else {
             Flag::Redstone
@@ -705,12 +711,10 @@ impl Hooks for Mod {
             name: event.name.to_owned(),
             operator: event.permission_level > 0,
         });
-        flow(self.service().blocks_physical_trigger(
-            dimension_name(&event.dimension),
-            pos,
-            player.as_ref(),
-            flag,
-        ))
+        flow(
+            self.service()
+                .blocks_physical_trigger(dimension, pos, player.as_ref(), flag),
+        )
     }
 
     fn block_fade(&self, _: &dyn LevelHost, event: &mut mod_api::BlockFadeEvent) -> Flow {

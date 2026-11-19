@@ -275,6 +275,10 @@ impl Service {
         denied
     }
 
+    pub fn blocks_egg_trample(&self, dimension: &str, pos: Point, is_player: bool) -> bool {
+        self.store.is_some() && !is_player && !self.natural(dimension, pos, Flag::Build)
+    }
+
     pub fn blocks_falling(
         &self,
         dimension: &str,
