@@ -543,6 +543,28 @@ fn pvp_uses_the_shooters_current_level_and_the_victims_block() {
 }
 
 #[test]
+fn creature_spawn_flags_follow_living_entities_instead_of_spawn_categories() {
+    use crate::creature_spawn_flag;
+
+    for kind in [
+        "minecraft:armor_stand",
+        "minecraft:iron_golem",
+        "minecraft:ender_dragon",
+        "minecraft:slime",
+    ] {
+        assert_eq!(creature_spawn_flag(kind, true), Some(Flag::SpawnAnimals));
+    }
+    assert_eq!(
+        creature_spawn_flag("minecraft:zombie", true),
+        Some(Flag::SpawnMonster)
+    );
+    assert_eq!(creature_spawn_flag("minecraft:player", true), None);
+    for kind in ["minecraft:item", "minecraft:oak_boat", "minecraft:arrow"] {
+        assert_eq!(creature_spawn_flag(kind, false), None);
+    }
+}
+
+#[test]
 fn damage_uses_player_responsibility_or_natural_rules_by_victim_kind() {
     use crate::combat::denies_entity_damage as denied;
     assert_eq!(

@@ -813,10 +813,9 @@ impl Hooks for Mod {
         let Some(entity) = host.entity(event.entity) else {
             return Flow::Continue;
         };
-        let category = entity.classification(host);
-        if category.is_none() || category == Some(mod_api::MobCategory::Misc) {
+        let Some(flag) = creature_spawn_flag(event.kind, host.living(entity).is_some()) else {
             return Flow::Continue;
-        }
+        };
         let uuid = entity.uuid(host);
         let mut service = self.service();
         if service.store.is_none()
@@ -824,11 +823,6 @@ impl Hooks for Mod {
         {
             return Flow::Continue;
         }
-        let flag = if hostile(event.kind) {
-            Flag::SpawnMonster
-        } else {
-            Flag::SpawnAnimals
-        };
         flow(!service.natural(event.dimension, block_position(event.pos), flag))
     }
 
@@ -1616,6 +1610,19 @@ fn pressure_chamber(cauldron: Point, at: impl Fn(Point) -> Option<String>) -> Op
             })
         })
         .then_some(top)
+}
+
+fn creature_spawn_flag(kind: &str, living: bool) -> Option<Flag> {
+    // Paper fires CreatureSpawnEvent for every non-player LivingEntity,
+    // including armor stands whose vanilla spawn category is Misc.
+    if !living || kind == "minecraft:player" {
+        return None;
+    }
+    Some(if hostile(kind) {
+        Flag::SpawnMonster
+    } else {
+        Flag::SpawnAnimals
+    })
 }
 
 fn hostile(kind: &str) -> bool {
