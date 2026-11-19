@@ -41,6 +41,34 @@ fn overlap_rules_cover_the_whole_cuboid() {
 }
 
 #[test]
+fn non_lava_flow_checks_both_endpoints_and_the_destination_core() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = Service::default();
+    service.start(dir.path().into());
+    let mut claim = area(1, [0, 64, 0], 8);
+    claim.flags.insert(Flag::Build, true);
+    claim.flags.insert(Flag::Lava, true);
+    claim.flags.insert(Flag::Water, false);
+    service.index.add(claim.clone()).unwrap();
+
+    let dim = "minecraft:overworld";
+    let inside = [1, 64, 0];
+    let outside = [20, 64, 0];
+    let core = [0, 64, 0];
+    assert!(service.blocks_flow(dim, inside, outside, Flag::Water));
+    assert!(service.blocks_flow(dim, outside, inside, Flag::Water));
+    assert!(!service.blocks_flow(dim, outside, [21, 64, 0], Flag::Water));
+    assert!(!service.blocks_flow(dim, outside, inside, Flag::Lava));
+
+    service.index = AreaIndex::default();
+    claim.flags.insert(Flag::Water, true);
+    service.index.add(claim).unwrap();
+    assert!(!service.blocks_flow(dim, inside, outside, Flag::Water));
+    assert!(!service.blocks_flow(dim, outside, inside, Flag::Water));
+    assert!(service.blocks_flow(dim, outside, core, Flag::Water));
+}
+
+#[test]
 fn falling_rules_distinguish_the_original_claim_from_external_or_unknown_origins() {
     let dir = tempfile::tempdir().unwrap();
     let mut service = Service::default();

@@ -1179,12 +1179,9 @@ impl Hooks for Mod {
             .and_then(|state| host.state_block(state))
             .is_some_and(|block| block == "minecraft:lava");
         let flag = if lava { Flag::Lava } else { Flag::Water };
-        let service = self.service();
         flow(
-            service.store.is_some()
-                && (service.core(dimension, destination).is_some()
-                    || !service.natural(dimension, source, flag)
-                    || !service.natural(dimension, destination, flag)),
+            self.service()
+                .blocks_flow(dimension, source, destination, flag),
         )
     }
 
@@ -1226,6 +1223,7 @@ impl Hooks for Mod {
         let flag = match event.kind {
             "fire" => return self.protect_natural(dimension, destination, Flag::Fire),
             "growth" => return self.protect_natural(dimension, destination, Flag::Build),
+            "dragon_egg" => Flag::Water,
             "fluid" => {
                 let lava = host
                     .block_state(point(event.from))
@@ -1235,12 +1233,9 @@ impl Hooks for Mod {
             }
             _ => return Flow::Continue,
         };
-        let service = self.service();
         flow(
-            service.store.is_some()
-                && (service.core(dimension, destination).is_some()
-                    || !service.natural(dimension, destination, flag)
-                    || !service.natural(dimension, point(event.from), flag)),
+            self.service()
+                .blocks_flow(dimension, point(event.from), destination, flag),
         )
     }
 

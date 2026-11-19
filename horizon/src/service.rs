@@ -205,6 +205,13 @@ impl Service {
         self.at(dimension, from).map(|area| area.id) != self.at(dimension, to).map(|area| area.id)
     }
 
+    pub fn blocks_flow(&self, dimension: &str, from: Point, to: Point, flag: Flag) -> bool {
+        self.store.is_some()
+            && (self.core(dimension, to).is_some()
+                || !self.natural(dimension, from, flag)
+                || !self.natural(dimension, to, flag))
+    }
+
     pub fn blocks_ridden_vehicle(
         &mut self,
         dimension: &str,
