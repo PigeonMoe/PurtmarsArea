@@ -1166,25 +1166,6 @@ impl Hooks for Mod {
         self.check_entity_location(host, event.player, target, Flag::Shear)
     }
 
-    fn fluid_place_block(
-        &self,
-        host: &dyn LevelHost,
-        event: &mut mod_api::FluidPlaceBlockEvent<'_>,
-    ) -> Flow {
-        let dimension = dimension_name(&event.dimension);
-        let source = point(event.liquid_pos);
-        let destination = point(event.pos);
-        let lava = host
-            .block_state(source)
-            .and_then(|state| host.state_block(state))
-            .is_some_and(|block| block == "minecraft:lava");
-        let flag = if lava { Flag::Lava } else { Flag::Water };
-        flow(
-            self.service()
-                .blocks_flow(dimension, source, destination, flag),
-        )
-    }
-
     fn hopper_pickup_item_pre(
         &self,
         _: &dyn LevelHost,
