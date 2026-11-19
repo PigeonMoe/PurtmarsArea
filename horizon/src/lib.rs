@@ -491,17 +491,27 @@ impl Hooks for Mod {
         host: &dyn mod_api::Host,
         event: &mut mod_api::DevicePlacementPreEvent<'_>,
     ) -> Flow {
-        let uuid = Uuid::from_u128(event.owner);
-        let online_name = host
-            .player(event.owner)
-            .and_then(|player| player.name(host));
-        flow(!self.service().allows_device_placement(
-            uuid,
-            online_name.as_deref(),
+        self.check_device_build(
+            host,
+            event.owner,
             event.operator,
             event.dimension,
             event.pos,
-        ))
+        )
+    }
+
+    fn device_break_pre(
+        &self,
+        host: &dyn mod_api::Host,
+        event: &mut mod_api::DeviceBreakPreEvent<'_>,
+    ) -> Flow {
+        self.check_device_build(
+            host,
+            event.owner,
+            event.operator,
+            event.dimension,
+            event.pos,
+        )
     }
 
     fn inventory_move_item(
@@ -1256,6 +1266,24 @@ impl Hooks for Mod {
 }
 
 impl Mod {
+    fn check_device_build(
+        &self,
+        host: &dyn mod_api::Host,
+        owner: u128,
+        operator: bool,
+        dimension: &str,
+        pos: Point,
+    ) -> Flow {
+        let online_name = host.player(owner).and_then(|player| player.name(host));
+        flow(!self.service().allows_device_build(
+            Uuid::from_u128(owner),
+            online_name.as_deref(),
+            operator,
+            dimension,
+            pos,
+        ))
+    }
+
     fn service(&self) -> MutexGuard<'_, Service> {
         self.service
             .lock()

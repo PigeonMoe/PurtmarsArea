@@ -81,11 +81,11 @@ fn devices_use_saved_owner_and_member_uuids_without_a_live_player_name() {
     service.index.add(claim).unwrap();
     let dim = "minecraft:overworld";
     let stranger = Uuid::from_u128(3);
-    assert!(service.allows_device_placement(OWNER, None, false, dim, [0, 63, 0]));
-    assert!(service.allows_device_placement(GUEST, None, false, dim, [0, 63, 0]));
-    assert!(!service.allows_device_placement(stranger, None, false, dim, [0, 63, 0]));
-    assert!(service.allows_device_placement(stranger, None, true, dim, [0, 63, 0]));
-    assert!(!service.allows_device_placement(OWNER, None, true, dim, [0, 64, 0]));
+    assert!(service.allows_device_build(OWNER, None, false, dim, [0, 63, 0]));
+    assert!(service.allows_device_build(GUEST, None, false, dim, [0, 63, 0]));
+    assert!(!service.allows_device_build(stranger, None, false, dim, [0, 63, 0]));
+    assert!(service.allows_device_build(stranger, None, true, dim, [0, 63, 0]));
+    assert!(!service.allows_device_build(OWNER, None, true, dim, [0, 64, 0]));
 }
 
 #[test]

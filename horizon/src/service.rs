@@ -168,7 +168,7 @@ impl Service {
         )
     }
 
-    pub fn allows_device_placement(
+    pub fn allows_device_build(
         &self,
         uuid: Uuid,
         online_name: Option<&str>,
