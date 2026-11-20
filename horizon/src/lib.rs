@@ -745,11 +745,30 @@ impl Hooks for Mod {
         let dimension = dimension_name(&event.dimension);
         let pos = point(event.pos);
         if event.player.is_some() {
-            // The player's use-on permission was checked against both blocks in right_click_block.
             flow(self.service().core(dimension, pos).is_some())
         } else {
             self.protect_natural(dimension, pos, Flag::Fire)
         }
+    }
+
+    fn player_block_ignite_pre(
+        &self,
+        _: &dyn LevelHost,
+        event: &mut mod_api::PlayerBlockIgnitePreEvent<'_>,
+    ) -> Flow {
+        let player = Uuid::from_u128(event.player);
+        let mut service = self.service();
+        if service.allows_device_build(
+            player,
+            Some(event.name),
+            event.permission_level > 0,
+            dimension_name(&event.dimension),
+            point(event.pos),
+        ) {
+            return Flow::Continue;
+        }
+        service.queue_denial(player, Flag::Build);
+        Flow::Cancel
     }
 
     fn tnt_primed(&self, host: &mut dyn ServerHost, event: &mut mod_api::TntPrimedEvent) -> Flow {
