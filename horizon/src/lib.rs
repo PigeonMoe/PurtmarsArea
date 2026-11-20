@@ -1397,11 +1397,16 @@ impl Mod {
             if from_dim != to_dim || from != to {
                 service.member_inputs.remove(&uuid);
             }
-            if from != to {
-                to.or(from).and_then(|id| service.occupation(uuid, id))
-            } else {
-                None
+            if from == to {
+                return;
             }
+            let Some(to) = to else {
+                service.clear_occupation(uuid);
+                drop(service);
+                presentation::wilderness(host, player);
+                return;
+            };
+            service.occupation(uuid, to)
         };
         if let Some(owner) = owner {
             presentation::occupation(host, player, &owner);
