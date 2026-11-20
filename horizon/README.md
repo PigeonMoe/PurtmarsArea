@@ -4,13 +4,13 @@ Horizon 26.3 原生服务端插件预览。Rust 插件实现位于本目录，Pa
 
 ## 在 PigeonMoe Horizon 上构建
 
-Horizon.8 的 `purtmarsarea.hmod` 是原生源码包，对应 PigeonMoe Horizon 引擎提交 `f0c80cd0c92c21fadf15696510bef4699bd62e7a`。使用该源码构建本地开发 SDK。生成的服务端运行时与执行构建的操作系统和 CPU 架构匹配。以下命令以 Linux 或 macOS 为例。
+Horizon.8 的 `purtmarsarea.hmod` 是原生源码包，对应 PigeonMoe Horizon 引擎提交 `db906c46a7dbb10f7b8a1c559e44febe19395f50`。使用该源码构建本地开发 SDK。生成的服务端运行时与执行构建的操作系统和 CPU 架构匹配。以下命令以 Linux 或 macOS 为例。
 
 先准备可运行的 `horizon-launcher`、Rustup、Python 3.11 或更新版本、JDK 25、兼容的 Minecraft Java Edition 26.3 客户端安装和对应的 26.3 服务端 JAR。使用绝对路径设置 `MINECRAFT_DIR` 及 `SERVER_JAR`。
 
 ```sh
 cd /absolute/path/to/pigeon-horizon
-git switch --detach f0c80cd0c92c21fadf15696510bef4699bd62e7a
+git switch --detach db906c46a7dbb10f7b8a1c559e44febe19395f50
 export RUSTUP_TOOLCHAIN="$(cat tools/ci/rust-version)"  # 1.99.1
 rustup toolchain install "$RUSTUP_TOOLCHAIN"
 rustup component add rust-src --toolchain "$RUSTUP_TOOLCHAIN"
