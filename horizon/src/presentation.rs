@@ -14,7 +14,7 @@ pub fn occupation(host: &mut dyn ServerHost, player: PlayerRef, owner: &str) {
 }
 
 pub fn wilderness(host: &mut dyn ServerHost, player: PlayerRef) {
-    let title = colored("荒地", "green");
+    let title = colored("荒地", "black");
     let subtitle = colored("无人占领", "gray");
     let _ = player.title(host, &title, &subtitle, [10, 40, 10]);
 }

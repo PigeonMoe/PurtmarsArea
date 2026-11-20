@@ -463,7 +463,7 @@ dependencies = [
 
 [[package]]
 name = "purtmarsarea"
-version = "2.1.1-horizon.7"
+version = "2.1.1-horizon.8"
 dependencies = [
  "horizon-mod-api",
  "md5",
