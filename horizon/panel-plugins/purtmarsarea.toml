@@ -15,3 +15,50 @@ command = "purtmarsarea mirror"
 id = "explosions"
 label = "爆炸记录"
 command = "purtmarsarea explosions"
+
+[[actions]]
+id = "reload"
+label = "重载配置"
+command = "purtmarsarea reload"
+
+[config]
+file = "plugins/PurtmarsArea/config.yml"
+note = "保存后，点击上方的「重载配置」使改动生效。"
+
+[[config.fields]]
+id = "area_limit"
+key = "Settings.AreaLimit"
+label = "每位玩家的领地数量上限"
+kind = "integer"
+min = 0
+max = 10000
+
+[[config.fields]]
+id = "member_limit"
+key = "Settings.MemberLimit"
+label = "单个领地的成员上限"
+kind = "integer"
+min = 0
+max = 10000
+
+[[config.fields]]
+id = "member_timeout"
+key = "Settings.MemberInputTimeout"
+label = "添加成员时的输入时限（秒）"
+kind = "integer"
+min = 1
+max = 3600
+
+[[config.fields]]
+id = "particles"
+key = "Settings.Flags.particle"
+label = "默认显示领地边界粒子"
+kind = "boolean"
+
+[[config.fields]]
+id = "particle_budget"
+key = "Settings.Particle.Budget"
+label = "每位玩家每轮的边界粒子上限"
+kind = "integer"
+min = 0
+max = 10000
