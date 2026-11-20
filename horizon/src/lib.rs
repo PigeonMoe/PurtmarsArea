@@ -582,13 +582,14 @@ impl Hooks for Mod {
     ) -> Flow {
         let from = block_position(event.from);
         let to = block_position(event.to);
-        flow(
-            self.service()
-                .blocks_ridden_vehicle(event.dimension, from, to, || {
-                    host.player(event.player)
-                        .and_then(|player| actor(host, player))
-                }),
-        )
+        let denied = self.service().blocks_ridden_vehicle(event.dimension, from, to, || {
+            host.player(event.player)
+                .and_then(|player| actor(host, player))
+        });
+        if denied {
+            event.paper_rollback = true;
+        }
+        flow(denied)
     }
 
     fn entity_mount(
