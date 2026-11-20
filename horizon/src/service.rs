@@ -219,7 +219,16 @@ impl Service {
         to: Point,
         player: impl FnOnce() -> Option<Actor>,
     ) -> bool {
-        if self.store.is_none() || !self.crosses(dimension, from, to) {
+        self.crosses(dimension, from, to) && self.blocks_vehicle_move_to(dimension, to, player)
+    }
+
+    pub fn blocks_vehicle_move_to(
+        &mut self,
+        dimension: &str,
+        to: Point,
+        player: impl FnOnce() -> Option<Actor>,
+    ) -> bool {
+        if self.store.is_none() {
             return false;
         }
         if let Some(actor) =
