@@ -275,6 +275,32 @@ impl Hooks for Mod {
         Flow::Continue
     }
 
+    fn entity_item_place_pre(
+        &self,
+        host: &dyn mod_api::Host,
+        event: &mut mod_api::EntityItemPlacePreEvent<'_>,
+    ) -> Flow {
+        let Some(actor) = host
+            .player(event.player)
+            .and_then(|player| actor(host, player))
+        else {
+            return Flow::Continue;
+        };
+        let mut service = self.service();
+        if service.store.is_none()
+            || service.allowed(
+                &actor,
+                event.dimension,
+                block_position(event.position),
+                Flag::Build,
+            )
+        {
+            return Flow::Continue;
+        }
+        service.queue_denial(actor.uuid, Flag::Build);
+        Flow::Cancel
+    }
+
     fn left_click_block(
         &self,
         host: &mut dyn ServerHost,
