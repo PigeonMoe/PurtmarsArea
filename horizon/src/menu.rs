@@ -1,7 +1,12 @@
-use crate::{Mod, actor, cores, model::Flag, service::manager_area, tell};
+use crate::{
+    Mod, actor, cores,
+    model::{ExpansionDirection, Flag, Point},
+    service::{Actor, Expansion, manager_area},
+    tell,
+};
 use mod_api::{
-    CommandSource, Identifier, ItemStack, MenuClickedEvent, MenuReplace, PlayerRef, ServerHost,
-    Tag, Text,
+    CommandSource, HostTransaction, Identifier, ItemPlace, ItemResource, ItemStack, MenuClickedEvent,
+    MenuReplace, PlayerRef, ServerHost, Tag, Text,
 };
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -17,7 +22,8 @@ const MEMBER_SLOTS: [usize; 28] = [
 #[derive(Clone)]
 pub enum Page {
     List(usize),
-    Home(Uuid),
+    Home(Uuid, Option<Point>),
+    Expansion(Uuid, Point),
     Rules {
         area: Uuid,
         member: Option<String>,
@@ -38,6 +44,7 @@ enum Action {
     },
     Add(Uuid),
     Remove(Uuid, String),
+    Expand(Expansion),
 }
 
 pub struct Menu {
@@ -101,18 +108,25 @@ pub fn at_player(
     let CommandSource::Player { player, .. } = *source else {
         return Err("此命令需要玩家执行".into());
     };
-    let page = if list {
-        Page::List(0)
+    if list {
+        open(modification, host, player, Page::List(0))
     } else {
-        let (dimension, pos) = location(host, player)?;
-        let area = modification
-            .service()
-            .at(&dimension, pos)
-            .map(|area| area.id)
-            .ok_or("当前位置没有领地")?;
-        Page::Home(area)
-    };
-    open(modification, host, player, page)
+        open_current(modification, host, player)
+    }
+}
+
+pub fn open_current(
+    modification: &Mod,
+    host: &mut dyn ServerHost,
+    player: PlayerRef,
+) -> Result<(), String> {
+    let (dimension, pos) = location(host, player)?;
+    let area = modification
+        .service()
+        .at(&dimension, pos)
+        .map(|area| area.id)
+        .ok_or("当前位置没有领地")?;
+    open(modification, host, player, Page::Home(area, None))
 }
 
 pub fn open(
@@ -154,14 +168,18 @@ pub fn open(
                     view.button(
                         slot,
                         icon(host, "beacon", &label, &[&owner, &coordinates]),
-                        Action::Open(Page::Home(area.id)),
+                        Action::Open(Page::Home(area.id, None)),
                     );
                 }
                 view.pages(host, page, areas.len(), 45, Page::List);
                 view
             }
-            Page::Home(id) => {
-                area(id)?;
+            Page::Home(id, selected) => {
+                let area = area(id)?;
+                let core = match selected {
+                    Some(pos) => area.core(pos).ok_or("领地核心已发生变化")?,
+                    None => &area.volumes[0],
+                };
                 let mut view = View::new("领地核心", 1);
                 view.button(
                     4,
@@ -172,6 +190,60 @@ pub fn open(
                         &["&7左键: 领地设置", "&7右键: 成员管理"],
                     ),
                     Action::Home(id),
+                );
+                view.button(
+                    6,
+                    icon(
+                        host,
+                        "smithing_table",
+                        "&e扩建领地",
+                        &["&7使用领地升级套装向指定方向扩建"],
+                    ),
+                    Action::Open(Page::Expansion(id, core.core_pos)),
+                );
+                view
+            }
+            Page::Expansion(id, core_pos) => {
+                use ExpansionDirection::{Down, East, North, South, Up, West};
+                let core = area(id)?.core(core_pos).ok_or("领地核心已发生变化")?;
+                let (dimension, height) = expansion_context(host, player)?;
+                let current = dimensions(core.sides());
+                let mut view = View::new("领地核心 > 扩建", 3);
+                let description = format!("&7当前尺寸：{current}");
+                view.items[4] = icon(host, "white_stained_glass", "&f领地范围", &[&description]);
+                for (slot, direction) in [
+                    (10, West), (11, East), (12, Down), (14, Up), (15, North), (16, South),
+                ] {
+                    let selection = Expansion {
+                        area: id,
+                        core: core_pos,
+                        direction,
+                    };
+                    let title = format!("&e{}", direction.title());
+                    match service.preview_expansion(&actor, &dimension, height.clone(), selection) {
+                        Ok(target) => {
+                            let target = format!("&7{current} → {}", dimensions(target.sides()));
+                            view.button(
+                                slot,
+                                icon(
+                                    host,
+                                    "green_stained_glass_pane",
+                                    &title,
+                                    &[&target, "&7消耗 1 个领地升级套装"],
+                                ),
+                                Action::Expand(selection),
+                            );
+                        }
+                        Err(error) => {
+                            let reason = format!("&c{error}");
+                            view.items[slot] = icon(host, "barrier", &title, &[&reason]);
+                        }
+                    }
+                }
+                view.button(
+                    22,
+                    icon(host, "arrow", "&f返回", &[]),
+                    Action::Open(Page::Home(id, Some(core_pos))),
                 );
                 view
             }
@@ -236,7 +308,7 @@ pub fn open(
                 let back = if personal.is_some() {
                     Page::Members(id, 0)
                 } else {
-                    Page::Home(id)
+                    Page::Home(id, None)
                 };
                 view.button(
                     49,
@@ -296,7 +368,7 @@ pub fn open(
                 view.button(
                     48,
                     icon(host, "redstone_block", "&f返回", &[]),
-                    Action::Open(Page::Home(id)),
+                    Action::Open(Page::Home(id, None)),
                 );
                 view.pages(host, page, area.members.len(), MEMBER_SLOTS.len(), |page| {
                     Page::Members(id, page)
@@ -408,8 +480,63 @@ fn perform(
             })?;
             Page::Members(id, 0)
         }
+        Action::Expand(_) if event.button != 0 || event.mode != 0 => return Ok(()),
+        Action::Expand(selection) => {
+            let result = expansion_context(host, player).and_then(|(dimension, height)| {
+                apply_expansion(modification, host, &actor, (&dimension, height), selection)
+            });
+            tell(host, player, result.unwrap_or_else(|error| error));
+            Page::Expansion(selection.area, selection.core)
+        }
     };
     open(modification, host, player, next)
+}
+
+fn dimensions([x, y, z]: Point) -> String {
+    format!("{x}×{y}×{z}")
+}
+
+fn expansion_context(
+    host: &dyn ServerHost,
+    player: PlayerRef,
+) -> Result<(String, std::ops::Range<i32>), String> {
+    let dimension = player
+        .dimension(host)
+        .ok_or("无法读取当前维度")?
+        .to_string();
+    let shape = player
+        .level(host)
+        .and_then(|level| level.dimension_shape(host))
+        .ok_or("无法读取当前维度的建筑高度")?;
+    Ok((dimension, shape.min_y..shape.min_y.saturating_add(shape.height)))
+}
+
+fn apply_expansion(
+    modification: &Mod,
+    host: &mut dyn ServerHost,
+    actor: &Actor,
+    (dimension, height): (&str, std::ops::Range<i32>),
+    selection: Expansion,
+) -> Result<String, String> {
+    let (place, kit) = (0..36)
+        .chain([-106])
+        .find_map(|slot| {
+            let place = ItemPlace::PlayerSlot {
+                player: actor.uuid.as_u128(),
+                slot,
+            };
+            let stack = place.stack(host)?;
+            cores::is_upgrade_kit(&stack).then(|| (place, ItemResource::of(&stack)))
+        })
+        .ok_or("背包中需要 1 个领地升级套装")?;
+    let volume = host.transaction(|host, tx| {
+        if place.extract(host, tx, &kit, 1) != 1 {
+            return Err("无法取用领地升级套装".into());
+        }
+        // A blocked boundary or failed save aborts the inventory transaction.
+        modification.service().expand(actor, dimension, height, selection)
+    })?;
+    Ok(format!("领地已扩建至 {}", dimensions(volume.sides())))
 }
 
 pub struct MemberInput {
@@ -545,4 +672,61 @@ fn icon(host: &dyn ServerHost, material: &str, name: &str, lore: &[&str]) -> Opt
         )
         .ok()?;
     Some(stack)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Area, Volume};
+    use mod_api::{prelude::ItemsHost, testing::FakeHost};
+
+    #[test]
+    fn expanding_charges_the_tagged_kit_once_and_rolls_back_payment_on_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let modification = Mod::default();
+        let owner = Actor { uuid: Uuid::from_u128(1), name: "Owner".into(), operator: false };
+        let area = Uuid::from_u128(11);
+        let neighbor = Uuid::from_u128(12);
+        let make_area = |id, pos| Area::new(id, "world".into(), Some(owner.uuid), owner.name.clone(),
+            vec![Volume::sized(pos, [4; 3], "starter".into()).unwrap()]);
+        {
+            let mut service = modification.service();
+            service.start(directory.path().into());
+            service.index.add(make_area(area, [0, 64, 0])).unwrap();
+            service.index.add(make_area(neighbor, [4, 64, 0])).unwrap();
+        }
+
+        let mut host = FakeHost::new();
+        let paper = Identifier::parse("minecraft:paper").unwrap();
+        host.registries.resolve_items([paper.clone()]).unwrap();
+        let mut kit = ItemStack::new(host.item_key(&paper).unwrap(), 2).unwrap();
+        kit.set_components([("minecraft:custom_data".into(), Tag::compound([(
+            "pigeonmoe:life_skills_item", Tag::String("territory_upgrade_kit".into()),
+        )]))].into()).unwrap();
+        let mut imitation = ItemStack::new(host.item_key(&paper).unwrap(), 2).unwrap();
+        imitation.set_components([("minecraft:custom_name".into(), cores::text("领地升级套装"))].into()).unwrap();
+        let slots = &mut host.join(owner.uuid.as_u128(), 1).slots;
+        slots.insert(0, imitation);
+        slots.insert(1, kit);
+        let selection = Expansion { area, core: [0, 64, 0], direction: ExpansionDirection::East };
+        let count = |host: &FakeHost, slot| host.players.get(owner.uuid.as_u128()).unwrap().slots[&slot].count();
+
+        let result = apply_expansion(&modification, &mut host, &owner, ("minecraft:overworld", -64..320), selection);
+        assert!(result.unwrap_err().contains("重叠"));
+        assert_eq!(count(&host, 1), 2);
+        modification.service().index.remove(neighbor).unwrap();
+        let result = apply_expansion(&modification, &mut host, &owner, ("minecraft:overworld", -64..320), selection);
+        assert_eq!(result.unwrap(), "领地已扩建至 8×4×4");
+        assert_eq!(count(&host, 0), 2);
+        assert_eq!(count(&host, 1), 1);
+        let store = crate::store::Store::new(directory.path().into());
+        assert_eq!(store.load().unwrap().areas[&area].volumes[0].sides(), [8, 4, 4]);
+
+        let save = directory.path().join("areas.yml");
+        std::fs::rename(&save, directory.path().join("saved-areas.yml")).unwrap();
+        std::fs::create_dir(&save).unwrap();
+        assert!(apply_expansion(&modification, &mut host, &owner, ("minecraft:overworld", -64..320), selection).is_err());
+        assert_eq!(count(&host, 1), 1);
+        assert_eq!(modification.service().index.areas[&area].volumes[0].sides(), [8, 4, 4]);
+    }
 }

@@ -1,4 +1,4 @@
-use crate::model::{Area, AreaIndex, Flag, Member, Volume};
+use crate::model::{Area, AreaIndex, ExpansionDirection, Flag, Member, Volume};
 use crate::service::{Actor, Service};
 use crate::store::{Store, parse};
 use std::{collections::BTreeMap, fs};
@@ -889,6 +889,58 @@ fn core_creation_enforces_world_height_limits_and_overlap() {
 }
 
 #[test]
+fn starter_crafts_with_a_chest_ring_and_existing_config_adds_the_exact_core() {
+    let recipe: serde_yaml_ng::Value = serde_yaml_ng::from_slice(crate::STARTER_RECIPE).unwrap();
+    let rows: Vec<_> = recipe["pattern"].as_sequence().unwrap().iter()
+        .map(|row| row.as_str().unwrap()).collect();
+    assert_eq!(rows, ["CCC", "CGC", "CCC"]);
+    assert_eq!(recipe["key"]["C"].as_str(), Some("minecraft:chest"));
+    assert_eq!(recipe["key"]["G"].as_str(), Some("minecraft:glass"));
+    assert_eq!(recipe["result"]["components"]["minecraft:custom_data"]
+        ["PublicBukkitValues"]["purtmarsarea:core"].as_str(), Some(crate::store::STARTER_CORE));
+
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("config.yml"), "Settings: {}\nCores:\n  '0':\n    dimensions: {x: 8, y: 8, z: 8}\n").unwrap();
+    let config = Store::new(dir.path().into()).config().unwrap();
+    let core = &config.cores[crate::store::STARTER_CORE];
+    assert_eq!(Some(crate::cores::item_id(&core.item).as_str()), recipe["result"]["id"].as_str());
+    assert_eq!(core.volume(crate::store::STARTER_CORE, [0, 64, 0], &config.settings).unwrap().sides(), [4; 3]);
+    assert_eq!(config.cores["0"].volume("0", [0, 64, 0], &config.settings).unwrap().sides(), [8; 3]);
+    assert_eq!(config.settings.max_expansion_side_length, 64);
+}
+
+#[test]
+fn directional_expansion_respects_shared_horizontal_limit_and_all_dimension_height() {
+    use ExpansionDirection::{Down, East, North, Up, West};
+    let start = Volume::sized([0, 64, 0], [4; 3], "starter".into()).unwrap();
+    let overworld = -64..320;
+    let east = start.expanded(East, 64, overworld.clone()).unwrap();
+    assert_eq!(east.sides(), [8, 4, 4]);
+    assert_eq!((east.min, east.max), (start.min, [5, 65, 1]));
+    let capped = east.expanded(West, 9, overworld.clone()).unwrap();
+    assert_eq!(capped.sides(), [9, 4, 4]);
+    assert!(capped.expanded(East, 9, overworld.clone()).is_err());
+    assert!(capped.expanded(North, 9, overworld.clone()).is_ok());
+
+    let mut tall = capped;
+    for direction in [Up, Down] {
+        while let Ok(next) = tall.expanded(direction, 9, overworld.clone()) {
+            tall = next;
+        }
+    }
+    assert_eq!((tall.min[1], tall.max[1], tall.sides()), (-64, 319, [9, 384, 4]));
+    assert_eq!(tall.core_pos, start.core_pos);
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().into());
+    let mut index = AreaIndex::default();
+    let mut saved = area(1, [0, 64, 0], 4);
+    saved.volumes = vec![tall.clone()];
+    index.add(saved).unwrap();
+    store.save(&index).unwrap();
+    assert_eq!(store.load().unwrap().areas[&OWNER].volumes[0], tall);
+}
+
+#[test]
 fn legacy_import_is_deterministic_and_rejects_partial_import() {
     let dir = tempfile::tempdir().unwrap();
     let legacy = dir.path().join("legacy-save");
@@ -1017,4 +1069,6 @@ fn boundary_particles_keep_paper_edges_range_and_budget() {
         crate::presentation::boundary_points([&v].into_iter(), [100.0, 64.0, 0.0], &settings)
             .is_empty()
     );
+    let tall = Volume::new([0, 64, 0], [-2, -64, -2], [1, 319, 1], "starter".into()).unwrap();
+    assert!(!crate::presentation::boundary_points([&tall].into_iter(), [0.0, 300.0, 0.0], &settings).is_empty());
 }

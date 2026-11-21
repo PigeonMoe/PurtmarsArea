@@ -5,10 +5,21 @@ use uuid::Uuid;
 
 const CORE: &str = "purtmarsarea:core";
 const BROKEN: &str = "purtmarsarea:broken-core";
+const LIFE_SKILLS_ITEM: &str = "pigeonmoe:life_skills_item";
+const UPGRADE_KIT: &str = "territory_upgrade_kit";
 
 pub enum Marker {
     Core(String),
     Broken,
+}
+
+pub fn is_upgrade_kit(item: &ItemStack) -> bool {
+    matches!(
+        item.components()
+            .and_then(|patch| patch.as_nbt().get(&"minecraft:custom_data".into()))
+            .and_then(|data| data.get(LIFE_SKILLS_ITEM)),
+        Some(Tag::String(id)) if id.0.iter().copied().eq(UPGRADE_KIT.encode_utf16())
+    )
 }
 
 pub fn marker(item: &ItemStack) -> Option<Marker> {

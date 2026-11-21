@@ -1,0 +1,22 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": ["CCC", "CGC", "CCC"],
+  "key": {
+    "C": "minecraft:chest",
+    "G": "minecraft:glass"
+  },
+  "result": {
+    "id": "minecraft:white_stained_glass",
+    "count": 1,
+    "components": {
+      "minecraft:custom_data": {"PublicBukkitValues": {"purtmarsarea:core": "starter"}},
+      "minecraft:custom_name": {"text": "初始领地核心", "color": "yellow", "italic": false},
+      "minecraft:lore": [
+        {"text": "保护范围：4×4×4", "color": "gray", "italic": false},
+        {"text": "放置后创建领地，右键管理或扩建", "color": "gray", "italic": false}
+      ],
+      "minecraft:enchantment_glint_override": true
+    }
+  }
+}
