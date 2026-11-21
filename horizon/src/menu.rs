@@ -14,6 +14,7 @@ use uuid::Uuid;
 const FLAG_SLOTS: [usize; 22] = [
     10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34, 37,
 ];
+const TRAVEL_TITLE: &str = "领地传送";
 const MEMBER_SLOTS: [usize; 28] = [
     10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34, 37, 38, 39,
     40, 41, 42, 43,
@@ -22,6 +23,7 @@ const MEMBER_SLOTS: [usize; 28] = [
 #[derive(Clone)]
 pub enum Page {
     List(usize),
+    Travel(usize),
     Home(Uuid, Option<Point>),
     Expansion(Uuid, Point),
     Rules {
@@ -35,6 +37,7 @@ pub enum Page {
 #[derive(Clone)]
 enum Action {
     Open(Page),
+    Travel(Uuid),
     Home(Uuid),
     Rule {
         area: Uuid,
@@ -115,6 +118,17 @@ pub fn at_player(
     }
 }
 
+pub fn travel_for(
+    modification: &Mod,
+    host: &mut dyn ServerHost,
+    source: &CommandSource,
+) -> Result<(), String> {
+    let CommandSource::Player { player, .. } = *source else {
+        return Err("此命令需要玩家执行".into());
+    };
+    open(modification, host, player, Page::Travel(0))
+}
+
 pub fn open_current(
     modification: &Mod,
     host: &mut dyn ServerHost,
@@ -151,6 +165,42 @@ pub fn open(
             Ok(area)
         };
         match page {
+            Page::Travel(page) => {
+                let mut view = View::new(TRAVEL_TITLE, 6);
+                let dimension = player.dimension(host).ok_or("无法读取当前维度")?.to_string();
+                let mut areas: Vec<_> = service
+                    .index
+                    .areas
+                    .values()
+                    .filter(|area| {
+                        area.world == service.world(&dimension)
+                            && crate::travel::can_visit(&actor, area, &config.settings)
+                    })
+                    .collect();
+                areas.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+                let page = clamp_page(page, areas.len(), 45);
+                view.items[49] = icon(
+                    host,
+                    "paper",
+                    if areas.is_empty() { "&f当前维度没有可传送的领地" } else { "&f当前维度的领地" },
+                    &["&7传送成功后消耗 1 个领地传送符"],
+                );
+                for (slot, area) in areas.iter().skip(page * 45).take(45).enumerate() {
+                    let owner = if area.is_owner(actor.uuid, &actor.name) {
+                        "&7自己的领地".to_owned()
+                    } else {
+                        format!("&7受信任的领地 · 主人 {}", area.owner_name)
+                    };
+                    let label = format!("&e{}", area.name);
+                    view.button(
+                        slot,
+                        icon(host, "ender_pearl", &label, &[&owner, "&7点击传送"]),
+                        Action::Travel(area.id),
+                    );
+                }
+                view.pages(host, page, areas.len(), 45, Page::Travel);
+                view
+            }
             Page::List(page) => {
                 let mut view = View::new("领地列表", 6);
                 let areas: Vec<_> = service
@@ -377,11 +427,15 @@ pub fn open(
             }
         }
     };
+    let mut title = Text::literal(view.title);
+    if view.title == TRAVEL_TITLE {
+        title.style.insertion = Some("pigeonmoe:life_skills_menu".into());
+    }
     let window = host
         .open_menu(
             player.uuid(),
             (view.items.len() / 9) as u8,
-            Text::literal(view.title),
+            title,
             view.items,
             MenuReplace::InPlace,
         )
@@ -429,6 +483,10 @@ fn perform(
     let actor = actor(host, player).ok_or("无法读取玩家身份")?;
     let next = match action {
         Action::Open(page) => page,
+        Action::Travel(_) if event.button != 0 || event.mode != 0 => return Ok(()),
+        Action::Travel(area) => {
+            return modification.travel.start(modification, host, player, &actor, area);
+        }
         Action::Home(id) if event.button == 0 => Page::Rules {
             area: id,
             member: None,

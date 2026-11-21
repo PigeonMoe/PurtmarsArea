@@ -8,6 +8,7 @@ mod model;
 mod presentation;
 mod service;
 mod store;
+mod travel;
 
 #[cfg(test)]
 mod tests;
@@ -33,11 +34,13 @@ struct Mod {
     boundary_particle: std::sync::OnceLock<mod_api::ParticleKey>,
     registered_materials: std::sync::OnceLock<std::collections::BTreeSet<String>>,
     slimefun_loaded: std::sync::atomic::AtomicBool,
+    travel: travel::Travel,
 }
 
 #[mod_api::horizon_mod]
 impl Hooks for Mod {
     fn register(&self, register: &mut dyn Registrar, context: &RegistrationContext) {
+        self.travel.register(register);
         let _ = self
             .boundary_particle
             .set(register.particle_key("minecraft:end_rod"));
@@ -78,7 +81,8 @@ impl Hooks for Mod {
         }
     }
 
-    fn server_stopping(&self, _: &mut dyn ServerHost, _: &mut ServerStoppingEvent) {
+    fn server_stopping(&self, host: &mut dyn ServerHost, _: &mut ServerStoppingEvent) {
+        self.travel.clear(host);
         *self.service() = Service::default();
     }
 
@@ -109,6 +113,7 @@ impl Hooks for Mod {
                 }
             }
             menu::poll_inputs(self, host);
+            self.travel.tick(self, host);
             presentation::draw_boundaries(self, host);
         }
     }
@@ -164,6 +169,12 @@ impl Hooks for Mod {
             }
             return Flow::Cancel;
         }
+        if verb == Some("travel") {
+            if let Err(error) = menu::travel_for(self, host, event.source) {
+                let _ = host.commands().feedback(message(error));
+            }
+            return Flow::Cancel;
+        }
         let reply = commands::run(self, host, event);
         for line in reply.unwrap_or_else(|error| vec![error]) {
             let _ = host.commands().feedback(message(line));
@@ -195,8 +206,13 @@ impl Hooks for Mod {
         }
     }
 
-    fn player_logged_out(&self, _: &mut dyn ServerHost, event: &mut PlayerLoggedOutEvent<'_>) {
+    fn player_logged_out(&self, host: &mut dyn ServerHost, event: &mut PlayerLoggedOutEvent<'_>) {
+        self.travel.cancel(host, event.player);
         self.service().quit(Uuid::from_u128(event.player));
+    }
+
+    fn validate_tickets(&self, _: &mut dyn ServerHost, event: &mut mod_api::ValidateTicketsEvent<'_>) {
+        self.travel.validate(event);
     }
 
     fn break_block(&self, host: &mut dyn ServerHost, event: &mut BreakBlockEvent<'_>) -> Flow {
