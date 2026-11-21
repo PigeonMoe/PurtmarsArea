@@ -1,5 +1,5 @@
 use crate::{
-    model::{Area, AreaIndex, Flag, Member, Point, player_name},
+    model::{Area, AreaIndex, ExpansionDirection, Flag, Member, Point, Volume, player_name},
     store::{Config, KnownPlayers, Settings, Store},
 };
 use std::{
@@ -13,6 +13,13 @@ pub struct Actor {
     pub uuid: Uuid,
     pub name: String,
     pub operator: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct Expansion {
+    pub area: Uuid,
+    pub core: Point,
+    pub direction: ExpansionDirection,
 }
 
 impl Actor {
@@ -497,6 +504,57 @@ impl Service {
                 index.add(area)?;
             }
             Ok(())
+        })
+    }
+
+    pub fn preview_expansion(
+        &self,
+        actor: &Actor,
+        dimension: &str,
+        height: std::ops::Range<i32>,
+        selection: Expansion,
+    ) -> Result<Volume, String> {
+        let config = self.ready()?;
+        let area = self.index.areas.get(&selection.area).ok_or("领地已发生变化")?;
+        if !actor.manages(&config.settings, area) {
+            return Err("只有领地主人或管理员可以扩建".into());
+        }
+        if area.world != self.world(dimension) {
+            return Err("请前往领地所在维度再扩建".into());
+        }
+        let core = area.core(selection.core).ok_or("领地核心已发生变化")?;
+        let expanded = core.expanded(
+            selection.direction,
+            config.settings.max_expansion_side_length,
+            height,
+        )?;
+        if self
+            .index
+            .overlaps_except(&area.world, &expanded, Some((area.id, core.core_pos)))
+        {
+            return Err("扩建范围会与现有领地核心重叠".into());
+        }
+        Ok(expanded)
+    }
+
+    pub fn expand(
+        &mut self,
+        actor: &Actor,
+        dimension: &str,
+        height: std::ops::Range<i32>,
+        selection: Expansion,
+    ) -> Result<Volume, String> {
+        let volume = self.preview_expansion(actor, dimension, height, selection)?;
+        self.change(|index, _| {
+            let mut area = index.remove(selection.area).ok_or("领地已发生变化")?;
+            let target = area
+                .volumes
+                .iter_mut()
+                .find(|v| v.core_pos == selection.core)
+                .ok_or("领地核心已发生变化")?;
+            *target = volume.clone();
+            index.add(area)?;
+            Ok(volume)
         })
     }
 

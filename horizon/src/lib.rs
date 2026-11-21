@@ -25,6 +25,8 @@ use service::{Actor, Service};
 use std::sync::{Arc, Mutex, MutexGuard};
 use uuid::Uuid;
 
+const STARTER_RECIPE: &[u8] = include_bytes!("../data/purtmarsarea/starter_recipe.json");
+
 #[derive(Default)]
 struct Mod {
     service: Arc<Mutex<Service>>,
@@ -78,6 +80,13 @@ impl Hooks for Mod {
 
     fn server_stopping(&self, _: &mut dyn ServerHost, _: &mut ServerStoppingEvent) {
         *self.service() = Service::default();
+    }
+
+    fn data_pack_files(&self, _: &mut dyn ServerHost, event: &mut mod_api::DataPackFilesEvent<'_>) {
+        event.files.push((
+            "recipe/purtmarsarea:starter_core".into(),
+            STARTER_RECIPE.to_vec(),
+        ));
     }
 
     fn server_tick(&self, host: &mut dyn ServerHost, event: &mut ServerTickEvent) {
@@ -136,6 +145,19 @@ impl Hooks for Mod {
             return Flow::Continue;
         }
         let verb = event.command.literals.get(1).map(String::as_str);
+        if verb == Some("life_menu") {
+            let result = match (&*event.source, event.command.argument("target")) {
+                (
+                    mod_api::CommandSource::Console { permission },
+                    Some(mod_api::CommandArgumentValue::Player(target)),
+                ) if permission.level() >= 2 => menu::open_current(self, host, *target),
+                _ => Err("此命令仅供服务端调用，需要一名在线玩家".into()),
+            };
+            if let Err(error) = result {
+                let _ = host.commands().feedback(message(error));
+            }
+            return Flow::Cancel;
+        }
         if matches!(verb, Some("menu" | "list")) {
             if let Err(error) = menu::at_player(self, host, event.source, verb == Some("list")) {
                 let _ = host.commands().feedback(message(error));
@@ -391,7 +413,7 @@ impl Hooks for Mod {
                 if event.click.hand == mod_api::Hand::Main {
                     let area = self.service().core(dimension, pos).map(|area| area.id);
                     if let Some(area) = area
-                        && let Err(error) = menu::open(self, host, player, menu::Page::Home(area))
+                        && let Err(error) = menu::open(self, host, player, menu::Page::Home(area, Some(pos)))
                     {
                         tell(host, player, error);
                     }

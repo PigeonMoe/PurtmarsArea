@@ -20,6 +20,7 @@ const ADMIN: &[&str] = &[
 ];
 
 pub fn register(commands: &mut Vec<Command>) {
+    commands.push(Command::new("purtmarsarea life_menu <target:player>"));
     for root in ROOTS {
         for usage in [
             "",

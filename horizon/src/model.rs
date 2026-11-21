@@ -79,6 +79,40 @@ pub struct Volume {
     pub core: String,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum ExpansionDirection {
+    West,
+    East,
+    Down,
+    Up,
+    North,
+    South,
+}
+
+impl ExpansionDirection {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::West => "向西扩建（X−）",
+            Self::East => "向东扩建（X+）",
+            Self::Down => "向下扩建（Y−）",
+            Self::Up => "向上扩建（Y+）",
+            Self::North => "向北扩建（Z−）",
+            Self::South => "向南扩建（Z+）",
+        }
+    }
+
+    fn face(self) -> (usize, bool) {
+        match self {
+            Self::West => (0, false),
+            Self::East => (0, true),
+            Self::Down => (1, false),
+            Self::Up => (1, true),
+            Self::North => (2, false),
+            Self::South => (2, true),
+        }
+    }
+}
+
 impl Volume {
     pub fn new(core_pos: Point, min: Point, max: Point, core: String) -> Result<Self, String> {
         let [x, y, z] = core_pos.map(i32::unsigned_abs);
@@ -86,9 +120,12 @@ impl Volume {
             return Err("坐标超出范围".into());
         }
         if (0..3).any(|axis| {
+            // Old radius 128 saves have 257 inclusive horizontal blocks. A modern
+            // dimension may be as tall as Minecraft's 4064-block dimension limit.
+            let limit = if axis == 1 { 4064 } else { 257 };
             min[axis] > core_pos[axis]
                 || max[axis] < core_pos[axis]
-                || i64::from(max[axis]) - i64::from(min[axis]) >= 257
+                || i64::from(max[axis]) - i64::from(min[axis]) >= limit
         }) {
             return Err("无效的领地边界".into());
         }
@@ -120,6 +157,56 @@ impl Volume {
 
     pub fn contains(&self, pos: Point) -> bool {
         (0..3).all(|i| (self.min[i]..=self.max[i]).contains(&pos[i]))
+    }
+
+    pub fn sides(&self) -> Point {
+        std::array::from_fn(|axis| self.max[axis] - self.min[axis] + 1)
+    }
+
+    pub fn expanded(
+        &self,
+        direction: ExpansionDirection,
+        horizontal_limit: i32,
+        height: std::ops::Range<i32>,
+    ) -> Result<Self, String> {
+        const EXPANSION_PER_KIT: i32 = 4;
+        let (axis, positive) = direction.face();
+        let mut min = self.min;
+        let mut max = self.max;
+        if !height.contains(&min[1]) || !height.contains(&max[1]) {
+            return Err("现有领地超出了当前维度的建筑高度".into());
+        }
+        let amount = if axis == 1 {
+            let remaining = if positive {
+                height.end - 1 - max[1]
+            } else {
+                min[1] - height.start
+            };
+            if remaining == 0 {
+                return Err("这个方向已到达维度的建筑高度限制".into());
+            }
+            EXPANSION_PER_KIT.min(remaining)
+        } else {
+            let remaining = horizontal_limit - self.sides()[axis];
+            if remaining <= 0 {
+                return Err(format!("这条水平边已到达 {horizontal_limit} 格上限"));
+            }
+            let room = if positive {
+                29_999_999 - max[axis]
+            } else {
+                min[axis] + 30_000_000
+            };
+            if room <= 0 {
+                return Err("这个方向已到达世界坐标边界".into());
+            }
+            EXPANSION_PER_KIT.min(remaining).min(room)
+        };
+        if positive {
+            max[axis] += amount;
+        } else {
+            min[axis] -= amount;
+        }
+        Self::new(self.core_pos, min, max, self.core.clone())
     }
 
     fn intersects(&self, other: &Self) -> bool {
@@ -226,6 +313,15 @@ impl AreaIndex {
     }
 
     pub fn overlaps(&self, world: &str, volume: &Volume) -> bool {
+        self.overlaps_except(world, volume, None)
+    }
+
+    pub fn overlaps_except(
+        &self,
+        world: &str,
+        volume: &Volume,
+        except: Option<(Uuid, Point)>,
+    ) -> bool {
         let Some(chunks) = self.chunks.get(world) else {
             return false;
         };
@@ -237,7 +333,7 @@ impl AreaIndex {
                 self.areas[id]
                     .volumes
                     .iter()
-                    .any(|other| volume.intersects(other))
+                    .any(|other| except != Some((*id, other.core_pos)) && volume.intersects(other))
             })
     }
 

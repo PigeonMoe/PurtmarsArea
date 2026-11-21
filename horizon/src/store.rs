@@ -10,6 +10,7 @@ use uuid::Uuid;
 pub type KnownPlayers = BTreeMap<String, (Uuid, String)>;
 
 const DEFAULT_CONFIG: &str = include_str!("../data/purtmarsarea/config.yml");
+pub const STARTER_CORE: &str = "starter";
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -30,6 +31,7 @@ pub struct Settings {
     pub area_limit: usize,
     pub max_radius: i32,
     pub max_side_length: i32,
+    pub max_expansion_side_length: i32,
     pub claim_world: BTreeMap<String, BTreeSet<Flag>>,
     pub ignore_flags: BTreeSet<Flag>,
     pub flags: Rules,
@@ -47,6 +49,7 @@ impl Default for Settings {
             area_limit: 10,
             max_radius: 128,
             max_side_length: 256,
+            max_expansion_side_length: 64,
             claim_world: BTreeMap::new(),
             ignore_flags: BTreeSet::from([Flag::Teleport]),
             flags: Rules::new(),
@@ -137,6 +140,23 @@ impl Axes {
 }
 
 impl Core {
+    fn starter() -> Self {
+        Self {
+            dimensions: Some(Axes { x: 4, y: 4, z: 4 }),
+            size: None,
+            item: Item {
+                material: default_material(),
+                name: "&e初始领地核心".into(),
+                lore: vec![
+                    "&7保护范围：4×4×4".into(),
+                    "&7放置后创建领地，右键管理或扩建".into(),
+                ],
+                shiny: true,
+            },
+            drop: None,
+        }
+    }
+
     pub fn drop_item(&self) -> std::borrow::Cow<'_, Item> {
         self.drop.as_ref().map_or_else(
             || {
@@ -153,7 +173,9 @@ impl Core {
 
     pub fn volume(&self, id: &str, pos: Point, settings: &Settings) -> Result<Volume, String> {
         match (self.dimensions, self.size) {
-            (Some(dims), None) if dims.array().iter().all(|v| *v <= settings.max_side_length) => {
+            (Some(dims), None)
+                if id == STARTER_CORE || dims.array().iter().all(|v| *v <= settings.max_side_length) =>
+            {
                 Volume::sized(pos, dims.array(), id.into())
             }
             (None, Some(size)) if size.array().iter().all(|v| *v <= settings.max_radius) => {
@@ -334,6 +356,7 @@ impl Store {
         if config.cores.is_empty()
             || !(1..=128).contains(&config.settings.max_radius)
             || !(1..=256).contains(&config.settings.max_side_length)
+            || !(4..=256).contains(&config.settings.max_expansion_side_length)
             || config
                 .settings
                 .world_aliases
@@ -343,6 +366,9 @@ impl Store {
             return Err("核心配置无效".into());
         }
         for (id, core) in &config.cores {
+            if id == STARTER_CORE {
+                continue;
+            }
             core.volume(id, [0; 3], &config.settings)?;
             if std::iter::once(&core.item)
                 .chain(&core.drop)
@@ -351,6 +377,7 @@ impl Store {
                 return Err(format!("核心 {id} 的物品配置无效"));
             }
         }
+        config.cores.insert(STARTER_CORE.into(), Core::starter());
         Ok(config)
     }
 

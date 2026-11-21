@@ -86,31 +86,22 @@ pub fn boundary_points<'a>(
         return points;
     }
     for volume in volumes {
-        let horizontal_radius = [0, 2]
-            .into_iter()
-            .flat_map(|axis| {
-                [
-                    volume.max[axis] - volume.core_pos[axis],
-                    volume.core_pos[axis] - volume.min[axis],
-                ]
-            })
-            .max()
-            .unwrap_or(0);
-        if !within(
-            volume.core_pos.map(f64::from),
-            range + f64::from(horizontal_radius),
-        ) {
-            continue;
-        }
         let min = volume.min.map(f64::from);
         let max = volume.max.map(|value| f64::from(value) + 1.0);
+        let nearest = std::array::from_fn(|axis| viewer[axis].clamp(min[axis], max[axis]));
+        if !within(nearest, range) {
+            continue;
+        }
         for axis in 0..3 {
+            let first = ((viewer[axis] - range - min[axis]) / distance).ceil().max(0.0);
+            let end = max[axis].min(viewer[axis] + range);
             for fixed_1 in [min[(axis + 1) % 3], max[(axis + 1) % 3]] {
                 for fixed_2 in [min[(axis + 2) % 3], max[(axis + 2) % 3]] {
                     let mut pos = min;
+                    pos[axis] += first * distance;
                     pos[(axis + 1) % 3] = fixed_1;
                     pos[(axis + 2) % 3] = fixed_2;
-                    while pos[axis] <= max[axis] {
+                    while pos[axis] <= end {
                         if within(pos, range) {
                             points.push(pos);
                             if points.len() == budget {

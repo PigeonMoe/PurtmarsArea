@@ -4,6 +4,8 @@ Settings:
   AreaLimit: 10
   MaxRadius: 128
   MaxSideLength: 256
+  # 扩建后每条水平边的上限（X/Z 共用）；Y 使用维度的原版建筑高度。
+  MaxExpansionSideLength: 64
   MemberInputTimeout: 60
   # 按玩家 UUID 设置管理、绕过和创建领地权限。
   PermissionNodes: {}
@@ -44,6 +46,7 @@ Settings:
     explosion: false
     fire: false
     pvp: true
+# 初始领地核心由工作台合成，固定为 4×4×4。以下大规格适用于现有旧核心。
 # dimensions 是实际方块边长；旧配置 size 始终保持半径语义。
 Cores:
   '0':
