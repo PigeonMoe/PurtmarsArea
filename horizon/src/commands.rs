@@ -27,6 +27,7 @@ pub fn register(commands: &mut Vec<Command>) {
             " help",
             " info",
             " list",
+            " travel",
             " menu",
             " add <member:word>",
             " remove <member:word>",
@@ -82,6 +83,7 @@ pub fn run(
         "" | "help" => {
             let mut lines = vec![
                 "领地管理 /pa info | menu | list | add 玩家 | remove 玩家".into(),
+                "领地传送 /pa travel".into(),
                 "/pa set 权限 true/false [成员] | name 名称".into(),
             ];
             if admin {
