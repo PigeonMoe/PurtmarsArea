@@ -1268,10 +1268,33 @@ impl Hooks for Mod {
         }
     }
 
-    fn explosion_detonate(&self, _: &mut dyn ServerHost, event: &mut ExplosionDetonateEvent<'_>) {
+    fn explosion_detonate(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut ExplosionDetonateEvent<'_>,
+    ) {
         let mut service = self.service();
-        if service.store.is_some() && service.explosion(event.dimension, event.center, event.blocks)
-        {
+        if service.store.is_none() {
+            return;
+        }
+        let Some(level) = host.level(event.dimension) else {
+            return;
+        };
+        // Paper's explosion block list excludes air. Unloaded cells cannot be broken
+        // either. Keep the engine's original positions for an admitted blast.
+        let air = ["minecraft:air", "minecraft:cave_air", "minecraft:void_air"]
+            .map(|name| host.block_key(name));
+        let blocks: Vec<_> = event
+            .blocks
+            .iter()
+            .copied()
+            .filter(|&pos| {
+                level
+                    .block_state(host, pos)
+                    .is_some_and(|state| !air.contains(&Some(state.block())))
+            })
+            .collect();
+        if service.explosion(event.dimension, event.center, &blocks) {
             event.blocks.clear();
         }
     }

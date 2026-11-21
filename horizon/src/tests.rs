@@ -817,6 +817,8 @@ fn one_protected_candidate_blocks_the_batch_and_preserves_core_when_explosions_a
     let mut service = Service::default();
     service.start(dir.path().into());
     service.index.add(area(1, [0, 64, 0], 8)).unwrap();
+    assert!(!service.explosion("minecraft:overworld", [0.0, 65.0, 0.0], &[]));
+    assert!(service.explosions[0].contains("候选方块 0 | 受保护 0"));
     assert!(service.explosion(
         "minecraft:overworld",
         [4.0, 65.0, 0.0],
