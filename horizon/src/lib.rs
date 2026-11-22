@@ -18,8 +18,8 @@ use mod_api::{
     Flow, Hooks, HostBlockStates, HostSide, InteractionResult, ItemPickedUpEvent, LevelDimension,
     LevelHost, PistonPreEvent, Placement, PlayerLoggedInEvent, PlayerLoggedOutEvent,
     PlayerMoveEvent, PlayerRef, RegisterCommandsEvent, Registrar, RegistrationContext,
-    RightClickBlockEvent, RunModCommandEvent, ServerHost, ServerStartedEvent, ServerStoppingEvent,
-    ServerTickEvent, Text, TriState,
+    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ServerHost, ServerStartedEvent,
+    ServerStoppingEvent, ServerTickEvent, Text, TriState,
 };
 use model::{Flag, Point};
 use service::{Actor, Service};
@@ -32,6 +32,7 @@ const STARTER_RECIPE: &[u8] = include_bytes!("../data/purtmarsarea/starter_recip
 struct Mod {
     service: Arc<Mutex<Service>>,
     boundary_particle: std::sync::OnceLock<mod_api::ParticleKey>,
+    survey_particle: std::sync::OnceLock<mod_api::ParticleKey>,
     registered_materials: std::sync::OnceLock<std::collections::BTreeSet<String>>,
     slimefun_loaded: std::sync::atomic::AtomicBool,
     travel: travel::Travel,
@@ -44,6 +45,9 @@ impl Hooks for Mod {
         let _ = self
             .boundary_particle
             .set(register.particle_key("minecraft:end_rod"));
+        let _ = self
+            .survey_particle
+            .set(register.particle_key("minecraft:electric_spark"));
         let config = store::Store::new(data_path()).config();
         let Ok(config) = config else { return };
         let materials: std::collections::BTreeSet<_> = config
@@ -415,26 +419,32 @@ impl Hooks for Mod {
         let (core, locked) = {
             let service = self.service();
             (
-                service.core(dimension, pos).is_some(),
+                service.core(dimension, pos).map(|area| area.id),
                 service.error.is_some(),
             )
         };
-        if core
-            || slimefun
+        if let Some(area) = core {
+            if event.click.hand == mod_api::Hand::Main {
+                let page = if event.click.stack.is_some_and(|stack| cores::is_expansion_ruler(host, stack)) {
+                    *event.cancellation_result = InteractionResult::SuccessServer;
+                    menu::Page::ExpansionPreview(area, pos)
+                } else {
+                    *event.cancellation_result = InteractionResult::Fail;
+                    menu::Page::Home(area, Some(pos))
+                };
+                if let Err(error) = menu::open(self, host, player, page) {
+                    tell(host, player, error);
+                }
+            } else {
+                *event.cancellation_result = InteractionResult::Fail;
+            }
+            return Flow::Cancel;
+        }
+        if slimefun
             || locked
             || flag
                 .is_some_and(|flag| self.check(host, player, dimension, pos, flag) == Flow::Cancel)
         {
-            if core {
-                if event.click.hand == mod_api::Hand::Main {
-                    let area = self.service().core(dimension, pos).map(|area| area.id);
-                    if let Some(area) = area
-                        && let Err(error) = menu::open(self, host, player, menu::Page::Home(area, Some(pos)))
-                    {
-                        tell(host, player, error);
-                    }
-                }
-            }
             *event.cancellation_result = InteractionResult::Fail;
             return Flow::Cancel;
         }
@@ -466,6 +476,26 @@ impl Hooks for Mod {
             self.service().clicked_cores.insert(uuid, id);
         }
         Flow::Continue
+    }
+
+    #[listener(priority = 100)]
+    fn right_click_item(&self, host: HostSide, event: &mut RightClickItemEvent<'_>) -> Flow {
+        let HostSide::Server(host) = host else {
+            return Flow::Continue;
+        };
+        if event.click.hand != mod_api::Hand::Main
+            || !cores::is_expansion_ruler(host, event.click.stack)
+        {
+            return Flow::Continue;
+        }
+        let Some(player) = host.player(event.click.player) else {
+            return Flow::Continue;
+        };
+        if let Err(error) = menu::open_current_preview(self, host, player) {
+            tell(host, player, error);
+        }
+        *event.cancellation_result = InteractionResult::SuccessServer;
+        Flow::Cancel
     }
 
     fn container_opened(

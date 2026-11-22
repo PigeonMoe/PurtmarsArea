@@ -7,6 +7,7 @@ const CORE: &str = "purtmarsarea:core";
 const BROKEN: &str = "purtmarsarea:broken-core";
 const LIFE_SKILLS_ITEM: &str = "pigeonmoe:life_skills_item";
 const UPGRADE_KIT: &str = "territory_upgrade_kit";
+const EXPANSION_RULER: &str = "claim_ruler";
 
 pub enum Marker {
     Core(String),
@@ -14,11 +15,19 @@ pub enum Marker {
 }
 
 pub fn is_upgrade_kit(item: &ItemStack) -> bool {
+    has_life_skills_marker(item, UPGRADE_KIT)
+}
+
+pub fn is_expansion_ruler(host: &dyn ServerHost, item: &ItemStack) -> bool {
+    has_life_skills_marker(item, EXPANSION_RULER) && item.item().id(host) == "minecraft:compass"
+}
+
+fn has_life_skills_marker(item: &ItemStack, expected: &str) -> bool {
     matches!(
         item.components()
             .and_then(|patch| patch.as_nbt().get(&"minecraft:custom_data".into()))
             .and_then(|data| data.get(LIFE_SKILLS_ITEM)),
-        Some(Tag::String(id)) if id.0.iter().copied().eq(UPGRADE_KIT.encode_utf16())
+        Some(Tag::String(id)) if id.0.iter().copied().eq(expected.encode_utf16())
     )
 }
 
