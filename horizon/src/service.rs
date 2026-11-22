@@ -395,10 +395,6 @@ impl Service {
         Some(owner)
     }
 
-    pub fn clear_occupation(&mut self, player: Uuid) {
-        self.occupations.remove(&player);
-    }
-
     pub fn explosion(&mut self, dimension: &str, center: [f64; 3], blocks: &[Point]) -> bool {
         let (hits, first) = blocks.iter().fold((0, None), |(hits, first), &p| {
             if self.core(dimension, p).is_some() || !self.natural(dimension, p, Flag::Explosion) {

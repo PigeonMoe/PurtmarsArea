@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 
+mod area_events;
 mod combat;
 mod commands;
 mod cores;
@@ -17,9 +18,9 @@ use mod_api::{
     BlockSpreadEvent, BreakBlockEvent, EntityPlaceEvent, ExplosionDetonateEvent, FillBucketEvent,
     Flow, Hooks, HostBlockStates, HostSide, InteractionResult, ItemPickedUpEvent, LevelDimension,
     LevelHost, PistonPreEvent, Placement, PlayerLoggedInEvent, PlayerLoggedOutEvent,
-    PlayerMoveEvent, PlayerRef, RegisterCommandsEvent, Registrar, RegistrationContext,
-    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ServerHost, ServerStartedEvent,
-    ServerStoppingEvent, ServerTickEvent, Text, TriState,
+    PlayerMoveEvent, PlayerPositionCommittedEvent, PlayerRef, RegisterCommandsEvent, Registrar,
+    RegistrationContext, RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ServerHost,
+    ServerStartedEvent, ServerStoppingEvent, ServerTickEvent, Text, TriState,
 };
 use model::{Flag, Point};
 use service::{Actor, Service};
@@ -1029,11 +1030,23 @@ impl Hooks for Mod {
         if from == to {
             return Flow::Continue;
         }
-        let result = self.check(host, player, dimension, to, Flag::Move);
-        if result == Flow::Continue {
-            self.transition(host, player, dimension, from, dimension, to);
+        self.check(host, player, dimension, to, Flag::Move)
+    }
+
+    fn player_position_committed(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut PlayerPositionCommittedEvent<'_>,
+    ) {
+        let from = block_position(event.from);
+        let to = block_position(event.to);
+        if event.from_level == event.to_level && from == to {
+            return;
         }
-        result
+        let Some(player) = host.player(event.player) else {
+            return;
+        };
+        self.transition(host, player, event.from_level, from, event.to_level, to);
     }
 
     fn teleport_command(
@@ -1518,7 +1531,6 @@ impl Mod {
         {
             return Flow::Cancel;
         }
-        self.transition(host, player, from.0, from.1, to.0, to.1);
         Flow::Continue
     }
 
@@ -1532,25 +1544,36 @@ impl Mod {
         to: Point,
     ) {
         let uuid = Uuid::from_u128(player.uuid());
-        let owner = {
-            let mut service = self.service();
-            let from = service.at(from_dim, from).map(|area| area.id);
-            let to = service.at(to_dim, to).map(|area| area.id);
-            if from_dim != to_dim || from != to {
-                service.member_inputs.remove(&uuid);
-            }
-            if from == to {
-                return;
-            }
-            let Some(to) = to else {
-                service.clear_occupation(uuid);
-                drop(service);
-                presentation::wilderness(host, player);
-                return;
-            };
-            service.occupation(uuid, to)
+        let Some(name) = player.name(host) else {
+            return;
         };
-        if let Some(owner) = owner {
+        let (leave, enter, occupation) = {
+            let mut service = self.service();
+            let from = service.at(from_dim, from);
+            let to = service.at(to_dim, to);
+            if from.map(|area| area.id) == to.map(|area| area.id) {
+                return;
+            }
+            let encode = |area| area_events::encode(uuid, &name, area);
+            let leave = from.map(encode);
+            let enter = to.map(encode);
+            let notice = to.or(from).map(|area| area.id);
+            service.member_inputs.remove(&uuid);
+            let occupation = notice.and_then(|area| service.occupation(uuid, area));
+            (leave, enter, occupation)
+        };
+        for (topic, payload) in [(area_events::LEAVE, leave), (area_events::ENTER, enter)] {
+            match payload {
+                Some(Ok(payload)) if !host.publish_mod_event(topic, &payload) => {
+                    eprintln!("[PurtmarsArea] 服务端拒绝领地事件 {topic}");
+                }
+                Some(Ok(_)) | None => {}
+                Some(Err(error)) => {
+                    eprintln!("[PurtmarsArea] 无法序列化领地事件 {topic}：{error}");
+                }
+            }
+        }
+        if let Some(owner) = occupation {
             presentation::occupation(host, player, &owner);
         }
     }
