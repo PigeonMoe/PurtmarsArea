@@ -425,7 +425,16 @@ impl Hooks for Mod {
         };
         if let Some(area) = core {
             if event.click.hand == mod_api::Hand::Main {
-                let page = if event.click.stack.is_some_and(|stack| cores::is_expansion_ruler(host, stack)) {
+                let page = if event
+                    .click
+                    .stack
+                    .is_some_and(|stack| cores::is_expansion_ruler(host, stack))
+                {
+                    self.service().record_ruler_block_click(
+                        uuid,
+                        dimension,
+                        host.server_monotonic_millis(),
+                    );
                     *event.cancellation_result = InteractionResult::SuccessServer;
                     menu::Page::ExpansionPreview(area, pos)
                 } else {
@@ -491,6 +500,14 @@ impl Hooks for Mod {
         let Some(player) = host.player(event.click.player) else {
             return Flow::Continue;
         };
+        if self.service().take_ruler_fallthrough(
+            Uuid::from_u128(player.uuid()),
+            dimension_name(&event.click.dimension),
+            host.server_monotonic_millis(),
+        ) {
+            *event.cancellation_result = InteractionResult::Consume;
+            return Flow::Cancel;
+        }
         if let Err(error) = menu::open_current_preview(self, host, player) {
             tell(host, player, error);
         }

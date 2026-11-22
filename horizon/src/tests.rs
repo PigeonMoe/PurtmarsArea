@@ -31,6 +31,34 @@ fn exact_bounds_and_negative_chunk_lookup() {
 }
 
 #[test]
+fn ruler_fallthrough_consumes_only_the_matching_recent_click() {
+    let mut service = Service::default();
+    let world = "minecraft:overworld";
+    let nether = "minecraft:the_nether";
+    service.record_ruler_block_click(OWNER, world, 1000);
+    assert!(!service.take_ruler_fallthrough(GUEST, world, 1020));
+    assert!(service.take_ruler_fallthrough(OWNER, world, 1100));
+    assert!(!service.take_ruler_fallthrough(OWNER, world, 1101));
+
+    service.record_ruler_block_click(OWNER, world, 2000);
+    assert!(!service.take_ruler_fallthrough(OWNER, nether, 2020));
+    service.record_ruler_block_click(OWNER, world, 3000);
+    assert!(!service.take_ruler_fallthrough(OWNER, world, 3151));
+    service.record_ruler_block_click(OWNER, world, 4000);
+    service.quit(OWNER);
+    assert!(!service.take_ruler_fallthrough(OWNER, world, 4010));
+}
+
+#[test]
+fn large_claim_can_be_inside_the_volume_but_out_of_particle_range() {
+    let volume = Volume::new([0, 64, 0], [-64, 0, -64], [64, 132, 64], "0".into()).unwrap();
+    let settings = crate::store::Particle::default();
+    let points = |viewer| crate::presentation::boundary_points([&volume].into_iter(), viewer, &settings);
+    assert!(points([0.5, 64.0, 0.5]).is_empty());
+    assert!(!points([-63.5, 64.0, -63.5]).is_empty());
+}
+
+#[test]
 fn overlap_rules_cover_the_whole_cuboid() {
     let mut index = AreaIndex::default();
     index.add(area(1, [0, 64, 0], 64)).unwrap();

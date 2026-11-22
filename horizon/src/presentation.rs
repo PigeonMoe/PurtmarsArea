@@ -30,17 +30,19 @@ pub fn draw_expansion_preview(
     host: &mut dyn ServerHost,
     player: PlayerRef,
     volume: &Volume,
-) {
+) -> bool {
     let Some((particle, viewer)) = modification
         .survey_particle
         .get()
         .zip(player.entity().position(host))
     else {
-        return;
+        return false;
     };
     let points = {
         let service = modification.service();
-        let Ok(config) = service.ready() else { return };
+        let Ok(config) = service.ready() else {
+            return false;
+        };
         let settings = &config.settings.particle;
         let preview = Particle {
             period: settings.period,
@@ -51,9 +53,11 @@ pub fn draw_expansion_preview(
         boundary_points(std::iter::once(volume), viewer, &preview)
     };
     let options = ParticleOptions::simple(*particle);
+    let mut shown = false;
     for point in points {
-        let _ = player.particle(host, &options, None, point);
+        shown |= player.particle(host, &options, None, point);
     }
+    shown
 }
 
 pub fn draw_boundaries(modification: &Mod, host: &mut dyn ServerHost) {

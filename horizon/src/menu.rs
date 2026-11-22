@@ -553,7 +553,7 @@ fn perform(
                 .service()
                 .preview_expansion(&actor, &dimension, height, selection)?;
             host.close_menu(event.uuid);
-            presentation::draw_expansion_preview(modification, host, player, &target);
+            let shown = presentation::draw_expansion_preview(modification, host, player, &target);
             tell(
                 host,
                 player,
@@ -565,6 +565,9 @@ fn perform(
                     coordinates(target.max),
                 ),
             );
+            if !shown {
+                tell(host, player, "当前位置未显示边界粒子，可查看预览坐标");
+            }
             return Ok(());
         }
     };

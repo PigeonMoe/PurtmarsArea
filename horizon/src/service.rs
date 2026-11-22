@@ -9,6 +9,9 @@ use std::{
 };
 use uuid::Uuid;
 
+// A client can follow a server-only core click with Item.use for the same press.
+const RULER_FALLTHROUGH_MILLIS: u64 = 150;
+
 pub struct Actor {
     pub uuid: Uuid,
     pub name: String,
@@ -43,6 +46,7 @@ pub struct Service {
     pub known_players: KnownPlayers,
     known_player_storage_ok: bool,
     pub clicked_cores: HashMap<Uuid, String>,
+    ruler_block_clicks: HashMap<Uuid, (String, u64)>,
     pub pending_placements: HashMap<Uuid, Area>,
     pub slimefun_loaded: bool,
     pub menus: HashMap<Uuid, crate::menu::Menu>,
@@ -144,6 +148,16 @@ impl Service {
     pub fn core(&self, dimension: &str, pos: Point) -> Option<&Area> {
         self.at(dimension, pos)
             .filter(|area| area.core(pos).is_some())
+    }
+
+    pub fn record_ruler_block_click(&mut self, player: Uuid, dimension: &str, now: u64) {
+        self.ruler_block_clicks.insert(player, (dimension.into(), now));
+    }
+
+    pub fn take_ruler_fallthrough(&mut self, player: Uuid, dimension: &str, now: u64) -> bool {
+        self.ruler_block_clicks.remove(&player).is_some_and(|(world, at)| {
+            world == dimension && now.saturating_sub(at) <= RULER_FALLTHROUGH_MILLIS
+        })
     }
 
     pub fn allowed(&self, actor: &Actor, dimension: &str, pos: Point, flag: Flag) -> bool {
@@ -604,6 +618,7 @@ impl Service {
         self.notices.remove(&uuid);
         self.occupations.remove(&uuid);
         self.clicked_cores.remove(&uuid);
+        self.ruler_block_clicks.remove(&uuid);
         self.pending_placements.remove(&uuid);
         self.menus.remove(&uuid);
         self.member_inputs.remove(&uuid);
