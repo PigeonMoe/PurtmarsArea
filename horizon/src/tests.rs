@@ -594,6 +594,33 @@ fn pvp_uses_the_shooters_current_level_and_the_victims_block() {
 }
 
 #[test]
+fn location_targeted_pvp_uses_only_the_landing_blocks_natural_policy() {
+    use crate::combat::{denies_pvp, denies_pvp_at};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = Service::default();
+    let overworld = "minecraft:overworld";
+    let nether = "minecraft:the_nether";
+    let protected = [0, 64, 0];
+    let open = [5, 64, 0];
+    assert!(!denies_pvp_at(&service, overworld, protected));
+    service.start(dir.path().into());
+    let mut claim = area(1, protected, 8);
+    claim.flags.insert(Flag::Pvp, false);
+    service.index.add(claim).unwrap();
+
+    assert!(denies_pvp_at(&service, overworld, protected));
+    assert!(!denies_pvp_at(&service, nether, protected));
+    assert!(!denies_pvp_at(&service, overworld, open));
+    assert!(denies_pvp(
+        &service,
+        Some((overworld, protected)),
+        overworld,
+        open.map(f64::from),
+    ));
+}
+
+#[test]
 fn creature_spawn_flags_follow_living_entities_instead_of_spawn_categories() {
     use crate::creature_spawn_flag;
 

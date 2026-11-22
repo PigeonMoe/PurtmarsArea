@@ -1048,6 +1048,14 @@ impl Hooks for Mod {
         self.check(host, player, &dimension, event.pos, Flag::Build)
     }
 
+    fn player_attack_at_pre(
+        &self,
+        _: &dyn mod_api::Host,
+        event: &mut mod_api::PlayerAttackAtPreEvent<'_>,
+    ) -> Flow {
+        flow(combat::denies_pvp_at(&self.service(), event.dimension, event.pos))
+    }
+
     fn attack_entity(
         &self,
         host: &mut dyn ServerHost,

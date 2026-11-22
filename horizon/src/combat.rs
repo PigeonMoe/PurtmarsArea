@@ -56,9 +56,12 @@ pub fn denies_pvp(
     dimension: &str,
     target: [f64; 3],
 ) -> bool {
-    service.store.is_some()
-        && (origin.is_some_and(|(dim, pos)| !service.natural(dim, pos, Flag::Pvp))
-            || !service.natural(dimension, block_position(target), Flag::Pvp))
+    origin.is_some_and(|(dim, pos)| denies_pvp_at(service, dim, pos))
+        || denies_pvp_at(service, dimension, block_position(target))
+}
+
+pub fn denies_pvp_at(service: &Service, dimension: &str, target: Point) -> bool {
+    service.store.is_some() && !service.natural(dimension, target, Flag::Pvp)
 }
 
 pub fn denies_entity_damage(
