@@ -1,7 +1,8 @@
 use crate::{
     Mod, actor, cores,
-    model::{ExpansionDirection, Flag, Point},
-    service::{Actor, Expansion, manager_area},
+    model::{Area, ExpansionDirection, Flag, Point, Volume},
+    presentation,
+    service::{Actor, Expansion, Service, manager_area},
     tell,
 };
 use mod_api::{
@@ -15,6 +16,7 @@ const FLAG_SLOTS: [usize; 22] = [
     10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34, 37,
 ];
 const TRAVEL_TITLE: &str = "领地传送";
+const PREVIEW_TITLE: &str = "扩建预览";
 const MEMBER_SLOTS: [usize; 28] = [
     10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34, 37, 38, 39,
     40, 41, 42, 43,
@@ -26,6 +28,7 @@ pub enum Page {
     Travel(usize),
     Home(Uuid, Option<Point>),
     Expansion(Uuid, Point),
+    ExpansionPreview(Uuid, Point),
     Rules {
         area: Uuid,
         member: Option<String>,
@@ -36,6 +39,7 @@ pub enum Page {
 
 #[derive(Clone)]
 enum Action {
+    Close,
     Open(Page),
     Travel(Uuid),
     Home(Uuid),
@@ -48,6 +52,7 @@ enum Action {
     Add(Uuid),
     Remove(Uuid, String),
     Expand(Expansion),
+    Survey(Expansion),
 }
 
 pub struct Menu {
@@ -141,6 +146,35 @@ pub fn open_current(
         .map(|area| area.id)
         .ok_or("当前位置没有领地")?;
     open(modification, host, player, Page::Home(area, None))
+}
+
+pub fn open_current_preview(
+    modification: &Mod,
+    host: &mut dyn ServerHost,
+    player: PlayerRef,
+) -> Result<(), String> {
+    let (dimension, pos) = location(host, player)?;
+    let (area, core) = {
+        let service = modification.service();
+        service.ready()?;
+        let area = service.at(&dimension, pos).ok_or("请在自己的领地内使用扩建标尺，或右击领地核心")?;
+        (area.id, nearest_core(area, pos).ok_or("领地核心已发生变化")?)
+    };
+    open(modification, host, player, Page::ExpansionPreview(area, core))
+}
+
+fn nearest_core(area: &Area, position: Point) -> Option<Point> {
+    area.volumes
+        .iter()
+        .map(|volume| volume.core_pos)
+        .min_by_key(|&core| {
+            let distance = core
+                .into_iter()
+                .zip(position)
+                .map(|(a, b)| u128::from(a.abs_diff(b)).pow(2))
+                .sum::<u128>();
+            (distance, core)
+        })
 }
 
 pub fn open(
@@ -253,49 +287,11 @@ pub fn open(
                 );
                 view
             }
-            Page::Expansion(id, core_pos) => {
-                use ExpansionDirection::{Down, East, North, South, Up, West};
+            Page::Expansion(id, core_pos) | Page::ExpansionPreview(id, core_pos) => {
+                let preview = matches!(page, Page::ExpansionPreview(..));
                 let core = area(id)?.core(core_pos).ok_or("领地核心已发生变化")?;
                 let (dimension, height) = expansion_context(host, player)?;
-                let current = dimensions(core.sides());
-                let mut view = View::new("领地核心 > 扩建", 3);
-                let description = format!("&7当前尺寸：{current}");
-                view.items[4] = icon(host, "white_stained_glass", "&f领地范围", &[&description]);
-                for (slot, direction) in [
-                    (10, West), (11, East), (12, Down), (14, Up), (15, North), (16, South),
-                ] {
-                    let selection = Expansion {
-                        area: id,
-                        core: core_pos,
-                        direction,
-                    };
-                    let title = format!("&e{}", direction.title());
-                    match service.preview_expansion(&actor, &dimension, height.clone(), selection) {
-                        Ok(target) => {
-                            let target = format!("&7{current} → {}", dimensions(target.sides()));
-                            view.button(
-                                slot,
-                                icon(
-                                    host,
-                                    "green_stained_glass_pane",
-                                    &title,
-                                    &[&target, "&7消耗 1 个领地升级套装"],
-                                ),
-                                Action::Expand(selection),
-                            );
-                        }
-                        Err(error) => {
-                            let reason = format!("&c{error}");
-                            view.items[slot] = icon(host, "barrier", &title, &[&reason]);
-                        }
-                    }
-                }
-                view.button(
-                    22,
-                    icon(host, "arrow", "&f返回", &[]),
-                    Action::Open(Page::Home(id, Some(core_pos))),
-                );
-                view
+                expansion_view(host, &service, &actor, id, core, (&dimension, height), preview)?
             }
             Page::Rules {
                 area: id,
@@ -482,6 +478,10 @@ fn perform(
 ) -> Result<(), String> {
     let actor = actor(host, player).ok_or("无法读取玩家身份")?;
     let next = match action {
+        Action::Close => {
+            host.close_menu(event.uuid);
+            return Ok(());
+        }
         Action::Open(page) => page,
         Action::Travel(_) if event.button != 0 || event.mode != 0 => return Ok(()),
         Action::Travel(area) => {
@@ -546,12 +546,101 @@ fn perform(
             tell(host, player, result.unwrap_or_else(|error| error));
             Page::Expansion(selection.area, selection.core)
         }
+        Action::Survey(_) if event.button != 0 || event.mode != 0 => return Ok(()),
+        Action::Survey(selection) => {
+            let (dimension, height) = expansion_context(host, player)?;
+            let target = modification
+                .service()
+                .preview_expansion(&actor, &dimension, height, selection)?;
+            host.close_menu(event.uuid);
+            presentation::draw_expansion_preview(modification, host, player, &target);
+            tell(
+                host,
+                player,
+                format!(
+                    "{} {} · 边界 {} 至 {}",
+                    selection.direction.title(),
+                    dimensions(target.sides()),
+                    coordinates(target.min),
+                    coordinates(target.max),
+                ),
+            );
+            return Ok(());
+        }
     };
     open(modification, host, player, next)
 }
 
 fn dimensions([x, y, z]: Point) -> String {
     format!("{x}×{y}×{z}")
+}
+
+fn coordinates([x, y, z]: Point) -> String {
+    format!("({x}, {y}, {z})")
+}
+
+fn expansion_view(
+    host: &dyn ServerHost,
+    service: &Service,
+    actor: &Actor,
+    area: Uuid,
+    core: &Volume,
+    (dimension, height): (&str, std::ops::Range<i32>),
+    preview: bool,
+) -> Result<View, String> {
+    use ExpansionDirection::{Down, East, North, South, Up, West};
+
+    let current = dimensions(core.sides());
+    let size = format!("&7当前尺寸：{current}");
+    let mut view = View::new(if preview { PREVIEW_TITLE } else { "领地核心 > 扩建" }, 3);
+    view.items[4] = if preview {
+        let limit = service.ready()?.settings.max_expansion_side_length;
+        let bounds = format!("&7X/Z 各最多 {limit} 格，Y：{} 至 {}", height.start, height.end - 1);
+        let center = format!("&7核心坐标：{}", coordinates(core.core_pos));
+        icon(host, "compass", "&f扩建标尺", &[&size, &center, &bounds, "&7点击可行方向，在世界中查看预览边界。"])
+    } else {
+        icon(host, "white_stained_glass", "&f领地范围", &[&size])
+    };
+
+    for (slot, direction) in [(10, West), (11, East), (12, Down), (14, Up), (15, North), (16, South)] {
+        let selection = Expansion { area, core: core.core_pos, direction };
+        let title = format!("&e{}", direction.title());
+        match service.preview_expansion(actor, dimension, height.clone(), selection) {
+            Ok(target) => {
+                let side_lengths = target.sides();
+                let changed = format!("&7{current} → {}", dimensions(side_lengths));
+                let pane = "green_stained_glass_pane";
+                if preview {
+                    let added = side_lengths.into_iter().zip(core.sides()).map(|(new, old)| new - old).sum::<i32>();
+                    let extra = format!("&7此方向增加 {added} 格");
+                    let min = format!("&7最小坐标：{}", coordinates(target.min));
+                    let max = format!("&7最大坐标：{}", coordinates(target.max));
+                    view.button(
+                        slot,
+                        icon(host, pane, &title, &[&changed, &extra, &min, &max, "&7正式扩建需 1 个领地升级套装"]),
+                        Action::Survey(selection),
+                    );
+                } else {
+                    view.button(
+                        slot,
+                        icon(host, pane, &title, &[&changed, "&7消耗 1 个领地升级套装"]),
+                        Action::Expand(selection),
+                    );
+                }
+            }
+            Err(error) => {
+                let reason = format!("&c{error}");
+                view.items[slot] = icon(host, "barrier", &title, &[&reason]);
+            }
+        }
+    }
+    let (label, action) = if preview {
+        ("&f关闭预览", Action::Close)
+    } else {
+        ("&f返回", Action::Open(Page::Home(area, Some(core.core_pos))))
+    };
+    view.button(22, icon(host, "arrow", label, &[]), action);
+    Ok(view)
 }
 
 fn expansion_context(
@@ -735,8 +824,68 @@ fn icon(host: &dyn ServerHost, material: &str, name: &str, lore: &[&str]) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Area, Volume};
     use mod_api::{prelude::ItemsHost, testing::FakeHost};
+
+    #[test]
+    fn ruler_preview_has_only_survey_actions_and_keeps_blocked_directions_inert() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut service = Service::default();
+        service.start(directory.path().into());
+        let owner = Actor { uuid: Uuid::from_u128(1), name: "Owner".into(), operator: false };
+        let id = Uuid::from_u128(11);
+        let make_area = |id, pos| Area::new(
+            id, "world".into(), Some(owner.uuid), owner.name.clone(),
+            vec![Volume::sized(pos, [4; 3], "starter".into()).unwrap()],
+        );
+        service.index.add(make_area(id, [0, 64, 0])).unwrap();
+        service.index.add(make_area(Uuid::from_u128(12), [4, 64, 0])).unwrap();
+        let core = service.index.areas[&id].core([0, 64, 0]).unwrap();
+
+        let mut host = FakeHost::new();
+        host.registries.resolve_items(
+            ["compass", "green_stained_glass_pane", "barrier", "arrow", "white_stained_glass"]
+                .map(|item| Identifier::from_parts("minecraft", item).unwrap()),
+        ).unwrap();
+        let context = ("minecraft:overworld", -64..320);
+        let preview = expansion_view(&host, &service, &owner, id, core, context.clone(), true).unwrap();
+        assert_eq!(preview.title, PREVIEW_TITLE);
+        assert!(matches!(preview.actions.get(&22), Some(Action::Close)));
+        assert_eq!(preview.actions.len(), 6);
+        for slot in [10, 12, 14, 15, 16] {
+            assert!(matches!(preview.actions.get(&slot), Some(Action::Survey(_))));
+        }
+        assert!(!preview.actions.contains_key(&11));
+        assert_eq!(preview.items[11].as_ref().unwrap().item().id(&host), "minecraft:barrier");
+        let selection = match preview.actions[&10] {
+            Action::Survey(selection) => selection,
+            _ => panic!("expected a survey action"),
+        };
+        let target = service.preview_expansion(&owner, context.0, context.1.clone(), selection).unwrap();
+        assert_eq!(target.min, [-6, 62, -2]);
+        assert_eq!(target.max, [1, 65, 1]);
+        assert_eq!(service.index.areas[&id].volumes[0].sides(), [4; 3]);
+
+        let normal = expansion_view(&host, &service, &owner, id, core, context, false).unwrap();
+        assert!(matches!(normal.actions.get(&10), Some(Action::Expand(_))));
+    }
+
+    #[test]
+    fn ruler_recognizes_only_the_existing_string_marker_on_a_compass() {
+        let mut host = FakeHost::new();
+        let ids = ["compass", "paper"].map(|item| Identifier::from_parts("minecraft", item).unwrap());
+        host.registries.resolve_items(ids.clone()).unwrap();
+        let mut compass = ItemStack::new(host.item_key(&ids[0]).unwrap(), 1).unwrap();
+        compass.set_components([("minecraft:custom_name".into(), cores::text("扩建标尺"))].into()).unwrap();
+        assert!(!cores::is_expansion_ruler(&host, &compass));
+        let data = [("minecraft:custom_data".into(), Tag::compound([(
+            "pigeonmoe:life_skills_item", Tag::String("claim_ruler".into()),
+        )]))].into();
+        compass.set_components(data).unwrap();
+        assert!(cores::is_expansion_ruler(&host, &compass));
+        let mut paper = ItemStack::new(host.item_key(&ids[1]).unwrap(), 1).unwrap();
+        paper.set_components(compass.components().unwrap().as_nbt().clone()).unwrap();
+        assert!(!cores::is_expansion_ruler(&host, &paper));
+    }
 
     #[test]
     fn expanding_charges_the_tagged_kit_once_and_rolls_back_payment_on_failure() {

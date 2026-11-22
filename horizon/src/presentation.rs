@@ -25,6 +25,37 @@ fn colored(value: &str, color: &str) -> Text {
     Text::literal(value).with_style(style)
 }
 
+pub fn draw_expansion_preview(
+    modification: &Mod,
+    host: &mut dyn ServerHost,
+    player: PlayerRef,
+    volume: &Volume,
+) {
+    let Some((particle, viewer)) = modification
+        .survey_particle
+        .get()
+        .zip(player.entity().position(host))
+    else {
+        return;
+    };
+    let points = {
+        let service = modification.service();
+        let Ok(config) = service.ready() else { return };
+        let settings = &config.settings.particle;
+        let preview = Particle {
+            period: settings.period,
+            distance: settings.distance,
+            range: settings.range,
+            budget: settings.budget.min(256),
+        };
+        boundary_points(std::iter::once(volume), viewer, &preview)
+    };
+    let options = ParticleOptions::simple(*particle);
+    for point in points {
+        let _ = player.particle(host, &options, None, point);
+    }
+}
+
 pub fn draw_boundaries(modification: &Mod, host: &mut dyn ServerHost) {
     let Some(particle) = modification.boundary_particle.get() else {
         return;

@@ -4,7 +4,7 @@ Horizon 26.3 原生服务端插件预览。Rust 插件实现位于本目录，Pa
 
 ## 在 PigeonMoe Horizon 上构建
 
-Horizon.10 的 `purtmarsarea.hmod` 是原生源码包，对应 PigeonMoe Horizon 引擎提交 `80b415f90b48c2f0d3c4f8c09e3729282395c9f4`。使用该源码构建本地开发 SDK。生成的服务端运行时与执行构建的操作系统和 CPU 架构匹配。以下命令以 Linux 或 macOS 为例。
+Horizon.11 的 `purtmarsarea.hmod` 是原生源码包，对应 PigeonMoe Horizon 引擎提交 `80b415f90b48c2f0d3c4f8c09e3729282395c9f4`。使用该源码构建本地开发 SDK。生成的服务端运行时与执行构建的操作系统和 CPU 架构匹配。以下命令以 Linux 或 macOS 为例。
 
 先准备可运行的 `horizon-launcher`、Rustup、Python 3.11 或更新版本、JDK 25、兼容的 Minecraft Java Edition 26.3 客户端安装和对应的 26.3 服务端 JAR。使用绝对路径设置 `MINECRAFT_DIR` 及 `SERVER_JAR`。
 
@@ -86,6 +86,8 @@ Settings:
 在原版工作台用 8 个箱子围住 1 个普通玻璃，合成 **初始领地核心**。放置后保护 4×4×4 格。右击核心，进入「扩建领地」即可查看六个方向的可扩建尺寸。扩建会消耗背包中的 1 个生活技能「领地升级套装」，选定的一面向外增加最多 4 格。
 
 `Settings.MaxExpansionSideLength` 为 X/Z 共用的边长上限，默认为 64。Y 轴扩建可到达当下维度的建筑高度上下界。与现有领地重叠、超出世界边界或无法保存时，扩建失败并保留套装。旧核心和已经保存的边界按原尺寸保留。
+
+领地主人和管理员可在主手持生活技能「扩建标尺」右击领地核心，或在获准管理的领地内右击空气，打开「扩建预览」。预览列出六个方向的可扩建尺寸、坐标和限制。点击可行方向可临时看到仅自己可见的边界粒子。预览无需消耗物品。
 
 ## 领地传送
 
