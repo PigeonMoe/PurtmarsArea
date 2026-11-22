@@ -9,5 +9,5 @@ capabilities = ["registries"]
 
 [native]
 game = "26.3"
-horizon = "284d437b8740620b22087c791ac358011de3c96a"
+horizon = "8a86b12f4a8bf636aa56f18c042fcc10e34198c0"
 mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"
