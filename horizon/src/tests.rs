@@ -18,6 +18,118 @@ fn area(id: u128, pos: [i32; 3], edge: i32) -> Area {
 }
 
 #[test]
+fn armor_stand_equipment_checks_the_stands_latest_position_and_container_permission() {
+    use mod_api::{
+        Backend, BackendMut, BackendMutRef, BackendRef, EntityRef, Host, Identifier, ModEntry,
+        PlayerRef, ServerHost, Text, TextFormError,
+        prelude::{
+            EntitiesBackend, EntitiesHost, PlayersBackend, PlayersBackendMut, PlayersClientBackend,
+            PlayersHost,
+        },
+        testing::FakeHost,
+    };
+
+    const STAND: u32 = 31;
+    struct StandHost {
+        fake: FakeHost,
+        position: [f64; 3],
+    }
+
+    impl Host for StandHost {
+        fn backend(&self) -> Option<BackendRef<'_>> {
+            Some(mod_api::__private::parts_installation::backend_ref(self))
+        }
+    }
+    impl EntitiesHost for StandHost {
+        fn entity(&self, id: u32) -> Option<EntityRef> {
+            self.fake.entity(id)
+        }
+    }
+    impl PlayersHost for StandHost {
+        fn player(&self, uuid: u128) -> Option<PlayerRef> {
+            self.fake.player(uuid)
+        }
+    }
+    mod_api::impl_host_areas!(StandHost, except(entities, players));
+
+    impl Backend for StandHost {}
+    impl EntitiesBackend for StandHost {
+        fn entity_block_position(&self, entity: EntityRef) -> Option<[i32; 3]> {
+            (entity.id() == STAND).then(|| crate::block_position(self.position))
+        }
+    }
+    impl PlayersBackend for StandHost {
+        fn player_name(&self, player: PlayerRef) -> Option<String> {
+            self.fake.player_name(player)
+        }
+        fn player_dimension(&self, player: PlayerRef) -> Option<Identifier> {
+            self.fake.player_dimension(player)
+        }
+        fn player_permission_level(&self, _: PlayerRef) -> Option<u8> {
+            Some(0)
+        }
+    }
+    impl PlayersClientBackend for StandHost {}
+    mod_api::impl_backend_areas!(StandHost, except(entities, players));
+
+    impl ServerHost for StandHost {
+        fn backend_mut(&mut self) -> Option<BackendMutRef<'_>> {
+            Some(mod_api::__private::parts_installation::backend_mut_ref(self))
+        }
+    }
+    mod_api::impl_server_host_areas!(StandHost);
+    impl BackendMut for StandHost {}
+    impl PlayersBackendMut for StandHost {
+        fn player_tell(&mut self, _: PlayerRef, _: Text) -> Result<bool, TextFormError> {
+            Ok(true)
+        }
+    }
+    mod_api::impl_backend_mut_areas!(StandHost, except(players));
+
+    mod_api::__private::initialize().unwrap();
+    let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = crate::Mod::default();
+    {
+        let mut service = plugin.service();
+        service.start(dir.path().into());
+        let mut claim = area(1, [0, 64, 0], 8);
+        claim.flags.insert(Flag::Build, true);
+        claim.flags.insert(Flag::Container, false);
+        service.index.add(claim).unwrap();
+    }
+    let mut host = StandHost {
+        fake: FakeHost::new(),
+        position: [5.0, 64.0, 0.0],
+    };
+    host.fake.join(OWNER.as_u128(), 11).name = "Owner".into();
+    host.fake.join(GUEST.as_u128(), 12).name = "Guest".into();
+    host.fake.level.entity(STAND, "minecraft:armor_stand");
+    let swap = |host: &mut StandHost, actor: Uuid, stand: u32| {
+        let mut cancel = false;
+        mod_api::dispatch_armor_stand_manipulate(
+            host,
+            actor.as_u128(),
+            "Player",
+            stand as i32,
+            "head",
+            &mut cancel,
+        );
+        cancel
+    };
+    let mods = [ModEntry::new("purtmarsarea", Box::new(plugin))].into();
+    mod_api::testing::with_dispatch(mods, || {
+        assert!(!swap(&mut host, GUEST, STAND));
+        host.position = [-3.1, 64.0, 0.0];
+        assert!(swap(&mut host, GUEST, STAND));
+        assert!(!swap(&mut host, OWNER, STAND));
+        assert!(!swap(&mut host, GUEST, STAND + 1));
+        host.position = [-4.1, 64.0, 0.0];
+        assert!(!swap(&mut host, GUEST, STAND));
+    });
+}
+
+#[test]
 fn exact_bounds_and_negative_chunk_lookup() {
     let a = area(1, [-16, 64, -16], 8);
     assert_eq!(a.volumes[0].min, [-20, 60, -20]);

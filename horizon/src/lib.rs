@@ -1336,6 +1336,20 @@ impl Hooks for Mod {
         self.check(host, player, dimension, pos, flag)
     }
 
+    fn armor_stand_manipulate(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::ArmorStandManipulateEvent<'_>,
+    ) -> Flow {
+        let Some(stand) = u32::try_from(event.stand_id)
+            .ok()
+            .and_then(|id| host.entity(id))
+        else {
+            return Flow::Continue;
+        };
+        self.check_entity_location(host, event.player, stand, Flag::Container)
+    }
+
     fn player_shear_entity(
         &self,
         host: &mut dyn ServerHost,
