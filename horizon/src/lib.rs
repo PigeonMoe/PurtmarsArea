@@ -692,24 +692,28 @@ impl Hooks for Mod {
         host: &dyn mod_api::Host,
         event: &mut mod_api::RiddenVehicleMovePreEvent<'_>,
     ) -> Flow {
-        let from = block_position(event.from);
         let to = block_position(event.to);
         let player = || {
             host.player(event.player)
                 .and_then(|player| actor(host, player))
         };
-        if let Some(driver) = event.guest_boat_driver {
+        if let Some(driver) = event.guest_driver {
             return flow(
                 driver == event.player
-                    && from != to
+                    && event
+                        .driver_move_from
+                        .is_some_and(|from| block_position(from) != to)
                     && self
                         .service()
                         .blocks_vehicle_move_to(event.dimension, to, player),
             );
         }
-        let denied = self
-            .service()
-            .blocks_ridden_vehicle(event.dimension, from, to, player);
+        let denied = self.service().blocks_ridden_vehicle(
+            event.dimension,
+            block_position(event.from),
+            to,
+            player,
+        );
         if denied {
             event.paper_rollback = true;
         }
