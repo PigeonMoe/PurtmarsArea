@@ -1021,6 +1021,123 @@ fn one_protected_candidate_blocks_the_batch_and_preserves_core_when_explosions_a
 }
 
 #[test]
+fn wind_burst_checks_claims_before_later_block_listeners() {
+    use crate::model::Point;
+    use mod_api::{
+        Backend, BackendRef, BlockKey, BlockState, BlockStateRecord, Hooks, Host, LevelRef,
+        ModEntry, ServerHost, WindBurstEvent,
+        prelude::{EntitiesHost, KeysHost, LevelsBackend},
+        testing::{FakeHost, with_dispatch},
+    };
+    use std::sync::{Arc, Mutex};
+
+    const WORLD: &str = "minecraft:overworld";
+    const CORE: Point = [0, 64, 0];
+    const AIR: Point = [2, 64, 0];
+    const INSIDE: Point = [3, 64, 0];
+    const OUTSIDE: Point = [4, 64, 0];
+
+    // FakeHost's block table is unresolved in this unit test. Supply the
+    // candidate cells and distinguish explicit air from an unloaded cell.
+    struct BurstHost(LevelRef);
+    impl Host for BurstHost {
+        fn backend(&self) -> Option<BackendRef<'_>> {
+            Some(mod_api::__private::parts_installation::backend_ref(self))
+        }
+    }
+    impl EntitiesHost for BurstHost {
+        fn level(&self, dimension: &str) -> Option<LevelRef> {
+            (dimension == WORLD).then_some(self.0)
+        }
+    }
+    impl KeysHost for BurstHost {
+        fn block_key(&self, id: &str) -> Option<BlockKey> {
+            let slot = match id {
+                "minecraft:air" => 0,
+                "minecraft:cave_air" => 1,
+                "minecraft:void_air" => 2,
+                "minecraft:stone" => 3,
+                _ => return None,
+            };
+            Some(mod_api::__private::parts_installation::block_key(slot))
+        }
+    }
+    mod_api::impl_host_areas!(BurstHost, except(entities, keys));
+    impl Backend for BurstHost {}
+    impl LevelsBackend for BurstHost {
+        fn level_block_state(&self, level: LevelRef, pos: Point) -> Option<BlockState> {
+            if level != self.0 {
+                return None;
+            }
+            let id = match pos {
+                AIR => "minecraft:cave_air",
+                CORE | INSIDE | OUTSIDE => "minecraft:stone",
+                _ => return None,
+            };
+            Some(BlockStateRecord::new(self.block_key(id)?, 0).into())
+        }
+    }
+    mod_api::impl_backend_areas!(BurstHost, except(levels));
+    impl ServerHost for BurstHost {}
+    mod_api::impl_server_host_areas!(BurstHost);
+
+    struct LaterListener(Arc<Mutex<Vec<Vec<Point>>>>);
+
+    #[mod_api::__subscriptions]
+    impl Hooks for LaterListener {
+        fn wind_burst(&self, _: &mut dyn ServerHost, event: &mut WindBurstEvent<'_>) {
+            self.0.lock().unwrap().push(event.blocks.clone());
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = crate::Mod::default();
+    let claims = plugin.service.clone();
+    {
+        let mut service = plugin.service();
+        service.start(dir.path().into());
+        let mut claim = area(1, CORE, 8);
+        claim.flags.insert(Flag::Explosion, false);
+        service.index.add(claim).unwrap();
+    }
+    mod_api::__private::initialize().unwrap();
+    let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+    let mut host = BurstHost(FakeHost::new().level.level());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mods = [
+        ModEntry::new("observer", Box::new(LaterListener(seen.clone()))),
+        ModEntry::new("purtmarsarea", Box::new(plugin)),
+    ]
+    .into();
+    with_dispatch(mods, || {
+        let mut wind = |positions: [Point; 2], expected: &[Point]| {
+            let mut blocks = positions.to_vec();
+            mod_api::dispatch_wind_burst(
+                &mut host,
+                WORLD,
+                [4.0, 64.5, 0.5],
+                &mut blocks,
+            );
+            assert_eq!(blocks, expected);
+            assert_eq!(seen.lock().unwrap().last().unwrap(), expected);
+        };
+        wind([OUTSIDE, AIR], &[OUTSIDE, AIR]);
+        wind([OUTSIDE, INSIDE], &[]);
+        claims
+            .lock()
+            .unwrap()
+            .index
+            .areas
+            .get_mut(&OWNER)
+            .unwrap()
+            .flags
+            .insert(Flag::Explosion, true);
+        wind([OUTSIDE, INSIDE], &[OUTSIDE, INSIDE]);
+        wind([OUTSIDE, CORE], &[]);
+    });
+}
+
+#[test]
 fn core_creation_enforces_world_height_limits_and_overlap() {
     let dir = tempfile::tempdir().unwrap();
     let mut service = Service::default();

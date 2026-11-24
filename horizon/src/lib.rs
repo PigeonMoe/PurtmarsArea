@@ -20,7 +20,7 @@ use mod_api::{
     LevelHost, PistonPreEvent, Placement, PlayerLoggedInEvent, PlayerLoggedOutEvent,
     PlayerMoveEvent, PlayerPositionCommittedEvent, PlayerRef, RegisterCommandsEvent, Registrar,
     RegistrationContext, RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ServerHost,
-    ServerStartedEvent, ServerStoppingEvent, ServerTickEvent, Text, TriState,
+    ServerStartedEvent, ServerStoppingEvent, ServerTickEvent, Text, TriState, WindBurstEvent,
 };
 use model::{Flag, Point};
 use service::{Actor, Service};
@@ -1397,30 +1397,12 @@ impl Hooks for Mod {
         host: &mut dyn ServerHost,
         event: &mut ExplosionDetonateEvent<'_>,
     ) {
-        let mut service = self.service();
-        if service.store.is_none() {
-            return;
-        }
-        let Some(level) = host.level(event.dimension) else {
-            return;
-        };
-        // Paper's explosion block list excludes air. Unloaded cells cannot be broken
-        // either. Keep the engine's original positions for an admitted blast.
-        let air = ["minecraft:air", "minecraft:cave_air", "minecraft:void_air"]
-            .map(|name| host.block_key(name));
-        let blocks: Vec<_> = event
-            .blocks
-            .iter()
-            .copied()
-            .filter(|&pos| {
-                level
-                    .block_state(host, pos)
-                    .is_some_and(|state| !air.contains(&Some(state.block())))
-            })
-            .collect();
-        if service.explosion(event.dimension, event.center, &blocks) {
-            event.blocks.clear();
-        }
+        self.filter_explosion_blocks(host, event.dimension, event.center, event.blocks);
+    }
+
+    #[listener(priority = 100)]
+    fn wind_burst(&self, host: &mut dyn ServerHost, event: &mut WindBurstEvent<'_>) {
+        self.filter_explosion_blocks(host, event.dimension, event.center, event.blocks);
     }
 
     fn block_spread(&self, host: &dyn LevelHost, event: &mut BlockSpreadEvent<'_>) -> Flow {
@@ -1483,6 +1465,38 @@ impl Mod {
             dimension,
             pos,
         ))
+    }
+
+    fn filter_explosion_blocks(
+        &self,
+        host: &dyn mod_api::Host,
+        dimension: &str,
+        center: [f64; 3],
+        candidates: &mut Vec<Point>,
+    ) {
+        let mut service = self.service();
+        if service.store.is_none() {
+            return;
+        }
+        let Some(level) = host.level(dimension) else {
+            return;
+        };
+        // Paper's explosion block list excludes air. Unloaded cells cannot be hit
+        // either. Keep the engine's original positions for an admitted blast.
+        let air = ["minecraft:air", "minecraft:cave_air", "minecraft:void_air"]
+            .map(|name| host.block_key(name));
+        let blocks: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|&pos| {
+                level
+                    .block_state(host, pos)
+                    .is_some_and(|state| !air.contains(&Some(state.block())))
+            })
+            .collect();
+        if service.explosion(dimension, center, &blocks) {
+            candidates.clear();
+        }
     }
 
     fn service(&self) -> MutexGuard<'_, Service> {
