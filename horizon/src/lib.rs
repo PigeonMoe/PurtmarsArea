@@ -1737,7 +1737,7 @@ fn interaction_flag(id: &str) -> Option<Flag> {
         | "composter" | "flower_pot" | "crafter" | "lectern" | "decorated_pot" => Flag::Container,
         "enchanting_table" => Flag::Enchant,
         "anvil" | "chipped_anvil" | "damaged_anvil" => Flag::Anvil,
-        "cake" | "candle_cake" => Flag::Cake,
+        "cake" => Flag::Cake,
         "lever" | "repeater" | "comparator" | "daylight_detector" | "tripwire" => Flag::Redstone,
         "respawn_anchor" | "tnt" | "dragon_egg" | "bell" | "sweet_berry_bush" | "cave_vines"
         | "cave_vines_plant" => Flag::Build,

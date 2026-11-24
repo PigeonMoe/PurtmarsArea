@@ -604,6 +604,12 @@ fn paper_block_clicks_use_the_classification_before_inventory_opening() {
     assert_eq!(interaction_flag("minecraft:ender_chest"), None);
     assert_eq!(interaction_flag("minecraft:dragon_egg"), Some(Flag::Build));
     assert_eq!(interaction_flag("minecraft:iron_door"), Some(Flag::Door));
+    assert_eq!(interaction_flag("minecraft:cake"), Some(Flag::Cake));
+    assert_eq!(interaction_flag("minecraft:candle_cake"), None);
+    assert_eq!(
+        interaction_flag("minecraft:red_candle_cake"),
+        Some(Flag::Cake)
+    );
     assert_eq!(
         interaction_flag("minecraft:stone_pressure_plate"),
         Some(Flag::Redstone)
