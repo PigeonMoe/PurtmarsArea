@@ -1,13 +1,17 @@
 use crate::{
     Mod, actor, block_position, cores,
     model::Flag,
-    service::{Service, manager_area},
+    service::{Actor, Service, manager_area},
 };
 use mod_api::{
-    Command, CommandArgumentValue, CommandInvocation, CommandSource, RunModCommandEvent, ServerHost,
+    Command, CommandArgumentError, CommandArgumentKind, CommandArgumentType, CommandArgumentValue,
+    CommandInvocation, CommandSender, CommandSource, CommandSuggestion,
+    PlayerCommandLiteralsSentEvent, RunModCommandEvent, ServerHost, Suggestion, TabCompleteEvent,
 };
 
 const ROOTS: [&str; 3] = ["purtmarsarea", "pa", "area"];
+const COMPLETION_WORD: &str = "purtmarsarea:completion_word";
+const HIDDEN_FROM_PLAYERS: &[&str] = &["welcome", "farewell"];
 const ADMIN: &[&str] = &[
     "item",
     "save",
@@ -19,6 +23,23 @@ const ADMIN: &[&str] = &[
     "explosions",
 ];
 
+pub(super) struct CompletionWord;
+
+impl CommandArgumentType for CompletionWord {
+    fn kind(&self) -> CommandArgumentKind {
+        CommandArgumentKind::Word
+    }
+
+    fn parse(&self, input: &str) -> Result<String, CommandArgumentError> {
+        Ok(input.to_owned())
+    }
+
+    fn suggest(&self, _: Option<&CommandSender>, _: &str) -> Vec<CommandSuggestion> {
+        // The server's tab_complete hook can read the current player and claim.
+        Vec::new()
+    }
+}
+
 pub fn register(commands: &mut Vec<Command>) {
     commands.push(Command::new("purtmarsarea life_menu <target:player>"));
     for root in ROOTS {
@@ -29,9 +50,9 @@ pub fn register(commands: &mut Vec<Command>) {
             " list",
             " travel",
             " menu",
-            " add <member:word>",
-            " remove <member:word>",
-            " set <flag:word> <allowed:boolean> [member:word]",
+            " add <member:purtmarsarea:completion_word>",
+            " remove <member:purtmarsarea:completion_word>",
+            " set <flag:purtmarsarea:completion_word> <allowed:purtmarsarea:completion_word> [member:purtmarsarea:completion_word]",
             " name <name:text>",
             " welcome [message:text]",
             " farewell [message:text]",
@@ -46,11 +67,122 @@ pub fn register(commands: &mut Vec<Command>) {
             "mirror",
             "explosions",
             "status",
-            "item <core:word> [target:player] [count:integer]",
+            "item <core:purtmarsarea:completion_word> [target:purtmarsarea:completion_word] [count:integer]",
         ] {
             commands.push(Command::new(&format!("{root} {usage}")));
         }
     }
+}
+
+fn player_admin(service: &Service, actor: &Actor) -> bool {
+    service
+        .config
+        .as_ref()
+        .map_or(actor.operator, |config| actor.admin(&config.settings))
+}
+
+pub fn hide_literals(modification: &Mod, event: &mut PlayerCommandLiteralsSentEvent<'_>) {
+    let actor = Actor {
+        uuid: uuid::Uuid::from_u128(event.player),
+        name: event.name.to_owned(),
+        operator: event.permission > 0,
+    };
+    let admin = player_admin(&modification.service(), &actor);
+    for root in ROOTS {
+        for hidden in HIDDEN_FROM_PLAYERS {
+            event.hidden_literals.push(format!("{root} {hidden}"));
+        }
+        if !admin {
+            for hidden in ADMIN {
+                event.hidden_literals.push(format!("{root} {hidden}"));
+            }
+        }
+    }
+    event.hidden_literals.push("purtmarsarea life_menu".into());
+}
+
+fn visible_to_player(subcommand: &str, admin: bool) -> bool {
+    subcommand != "life_menu"
+        && !HIDDEN_FROM_PLAYERS.contains(&subcommand)
+        && (admin || !ADMIN.contains(&subcommand))
+}
+
+pub fn complete(modification: &Mod, host: &dyn ServerHost, event: &mut TabCompleteEvent<'_>) {
+    let [start, end] = event.range;
+    let Some(before) = event.command.get(..start) else {
+        return;
+    };
+    let Some(prefix) = event.command.get(start..end) else {
+        return;
+    };
+    let mut words = before.split_whitespace();
+    if !words.next().is_some_and(|root| ROOTS.contains(&root)) {
+        return;
+    }
+    let Some(player) = host.player(event.player) else {
+        return;
+    };
+    let Some(actor) = actor(host, player) else {
+        return;
+    };
+    let service = modification.service();
+    let admin = player_admin(&service, &actor);
+    let Some(subcommand) = words.next().map(str::to_ascii_lowercase) else {
+        event
+            .suggestions
+            .retain(|suggestion| visible_to_player(&suggestion.text, admin));
+        return;
+    };
+    if !visible_to_player(&subcommand, admin) {
+        event.suggestions.clear();
+        return;
+    }
+    let Some(config) = service.config.as_ref() else {
+        return;
+    };
+    let choices: Vec<String> = match (subcommand.as_str(), words.count()) {
+        ("item", 0) => config.cores.keys().cloned().collect(),
+        ("add", 0) | ("item", 1) => host
+            .players()
+            .server_players()
+            .into_iter()
+            .filter_map(|player| player.name(host))
+            .collect(),
+        ("set", 0) => Flag::ALL
+            .iter()
+            .copied()
+            .filter(|flag| !config.settings.ignore_flags.contains(flag))
+            .map(|flag| flag.key().into())
+            .collect(),
+        ("set", 1) => vec!["true".into(), "false".into()],
+        ("remove", 0) | ("set", 2) => {
+            let Some(dimension) = player.dimension(host) else {
+                return;
+            };
+            let Some(pos) = player.entity().position(host).map(block_position) else {
+                return;
+            };
+            let Some(area) = service.at(&dimension.to_string(), pos) else {
+                return;
+            };
+            if !actor.manages(&config.settings, area) {
+                return;
+            }
+            area.members
+                .values()
+                .map(|member| member.name.clone())
+                .collect()
+        }
+        _ => return,
+    };
+    let prefix = prefix.to_lowercase();
+    event.suggestions.clear();
+    event.suggestions.extend(
+        choices
+            .into_iter()
+            .filter(|choice| choice.to_lowercase().starts_with(&prefix))
+            .map(|choice| Suggestion::new((start, end), choice)),
+    );
 }
 
 pub fn belongs_to_us(literals: &[String]) -> bool {
@@ -68,12 +200,9 @@ pub fn run(
     let subcommand = command.literals.get(1).map(String::as_str).unwrap_or("");
     let mut service = modification.service();
     let admin = match *event.source {
-        CommandSource::Player { player, .. } => actor(host, player).is_some_and(|actor| {
-            service
-                .config
-                .as_ref()
-                .map_or(actor.operator, |config| actor.admin(&config.settings))
-        }),
+        CommandSource::Player { player, .. } => {
+            actor(host, player).is_some_and(|actor| player_admin(&service, &actor))
+        }
         _ => event.source.permission().level() > 0,
     };
     if ADMIN.contains(&subcommand) && !admin {
@@ -127,7 +256,10 @@ pub fn run(
         }
         "load" | "reload" => {
             service.reload()?;
-            format!("已加载 {} 个领地", service.index.areas.len())
+            let count = service.index.areas.len();
+            drop(service);
+            host.commands().refresh_commands();
+            format!("已加载 {count} 个领地")
         }
         "import" => {
             let online: Vec<_> = host
@@ -140,9 +272,9 @@ pub fn run(
         }
         "item" => {
             let id = string(command, "core").ok_or("缺少核心编号")?;
-            let target = match command.argument("target") {
-                Some(CommandArgumentValue::Player(player)) => *player,
-                _ => match *event.source {
+            let target = match string(command, "target") {
+                Some(name) => host.players().player_by_name(name).ok_or("玩家不在线")?,
+                None => match *event.source {
                     CommandSource::Player { player, .. } => player,
                     _ => return Err("请指定一名在线玩家".into()),
                 },
@@ -158,9 +290,7 @@ pub fn run(
             let stack = cores::build(host, &core.item, id, count, false)?;
             let name = target.name(host).ok_or("玩家不在线")?;
             drop(service);
-            target
-                .give_stack(host, stack)
-                .map_err(|error| format!("核心发放失败：{error:?}"))?;
+            cores::give_naturally(host, target, stack)?;
             format!("已向 {name} 发放 {count} 个核心")
         }
         _ => {
@@ -234,9 +364,13 @@ pub fn run(
                 }
                 "set" => {
                     let flag = Flag::parse(string(command, "flag").ok_or("缺少权限")?)?;
-                    let Some(CommandArgumentValue::Boolean(value)) = command.argument("allowed")
-                    else {
-                        return Err("缺少权限值".into());
+                    let value = match string(command, "allowed")
+                        .map(str::to_ascii_lowercase)
+                        .as_deref()
+                    {
+                        Some("true") => true,
+                        Some("false") => false,
+                        _ => return Err("权限值只能为 true 或 false".into()),
                     };
                     let member = string(command, "member");
                     service.change(|index, config| {
@@ -253,9 +387,9 @@ pub fn run(
                                 .get_mut(&key)
                                 .ok_or("成员已发生变化")?
                                 .flags
-                                .insert(flag, *value);
+                                .insert(flag, value);
                         } else {
-                            area.flags.insert(flag, *value);
+                            area.flags.insert(flag, value);
                         }
                         Ok(())
                     })?;
@@ -283,6 +417,9 @@ pub fn run(
 pub fn string<'a>(command: &'a CommandInvocation, key: &str) -> Option<&'a str> {
     match command.argument(key) {
         Some(CommandArgumentValue::String(value)) => Some(value),
+        Some(CommandArgumentValue::Custom { kind, value }) if kind == COMPLETION_WORD => {
+            Some(value)
+        }
         _ => None,
     }
 }

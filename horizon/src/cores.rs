@@ -1,5 +1,8 @@
 use crate::{Service, message, presentation, store::Item, tell};
-use mod_api::{Compound, Identifier, ItemPart, ItemStack, OnBlockPlacedByEvent, ServerHost, Tag};
+use mod_api::{
+    Compound, HostTransaction, Identifier, ItemPart, ItemStack, OnBlockPlacedByEvent, PlayerRef,
+    ServerHost, Tag,
+};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -12,6 +15,62 @@ const EXPANSION_RULER: &str = "claim_ruler";
 pub enum Marker {
     Core(String),
     Broken,
+}
+
+pub(super) fn give_naturally(
+    host: &mut dyn ServerHost,
+    player: PlayerRef,
+    stack: ItemStack,
+) -> Result<(), String> {
+    let mut slots: [Option<ItemStack>; 36] = std::array::from_fn(|_| None);
+    for (slot, existing) in player.inventory_slots(host).ok_or("无法读取玩家背包")? {
+        if let Some(slot) = slots.get_mut(slot as usize) {
+            *slot = Some(existing);
+        }
+    }
+    let limit = host
+        .max_stack_size(stack.item())
+        .filter(|limit| *limit > 0)
+        .ok_or("无法读取核心堆叠上限")?;
+    let storage = slots.iter().enumerate();
+    let compatible = storage.clone().filter(|(_, slot)| {
+        slot.as_ref()
+            .is_some_and(|existing| existing.is_stackable_with(&stack))
+    });
+    let empty = storage.filter(|(_, slot)| slot.is_none());
+    let mut count = stack.count();
+    host.transaction(|host, _| {
+        for (slot, existing) in compatible.chain(empty) {
+            if count == 0 {
+                return Ok(());
+            }
+            let stored = existing.as_ref().map_or(0, ItemStack::count);
+            let inserted = limit.saturating_sub(stored).min(count);
+            if inserted == 0 {
+                continue;
+            }
+            let mut updated = stack.clone();
+            updated
+                .set_count(stored + inserted)
+                .map_err(|_| "无效核心物品数量")?;
+            player
+                .set_inventory_slot(host, slot as u32, Some(updated))
+                .map_err(|error| format!("核心发放失败：{error:?}"))?;
+            count -= inserted;
+        }
+        if count > 0 {
+            // Paper dropItemNaturally receives the original remainder even above the material limit.
+            let mut overflow = stack.clone();
+            overflow.set_count(count).map_err(|_| "无效核心物品数量")?;
+            if !player
+                .drop_item_naturally(host, overflow)
+                .map_err(|error| format!("核心掉落失败：{error:?}"))?
+            {
+                return Err("核心掉落失败".into());
+            }
+        }
+        Ok(())
+    })
 }
 
 pub fn is_upgrade_kit(item: &ItemStack) -> bool {

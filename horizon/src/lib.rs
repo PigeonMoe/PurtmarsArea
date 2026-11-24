@@ -42,6 +42,7 @@ struct Mod {
 #[mod_api::horizon_mod]
 impl Hooks for Mod {
     fn register(&self, register: &mut dyn Registrar, context: &RegistrationContext) {
+        register.register_command_argument("completion_word", commands::CompletionWord);
         self.travel.register(register);
         let _ = self
             .boundary_particle
@@ -144,6 +145,18 @@ impl Hooks for Mod {
 
     fn register_commands(&self, _: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
         commands::register(event.commands);
+    }
+
+    fn player_command_literals_sent(
+        &self,
+        _: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerCommandLiteralsSentEvent<'_>,
+    ) {
+        commands::hide_literals(self, event);
+    }
+
+    fn tab_complete(&self, host: &mut dyn ServerHost, event: &mut mod_api::TabCompleteEvent<'_>) {
+        commands::complete(self, host, event);
     }
 
     fn run_mod_command(
