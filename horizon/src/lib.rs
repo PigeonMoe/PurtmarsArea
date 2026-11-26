@@ -654,7 +654,7 @@ impl Hooks for Mod {
             host.player(event.player)
                 .and_then(|player| actor(host, player))
         };
-        if let Some(driver) = event.guest_boat_driver {
+        if let Some(driver) = event.guest_driver {
             return flow(
                 driver == event.player
                     && from != to
